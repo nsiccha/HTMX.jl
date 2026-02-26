@@ -1,0 +1,7 @@
+name = "HTMX"
+uuid = "27f3e1ef-6ef8-44dc-9e9a-2fb23ed44e83"
+authors = ["Nikolas Siccha <nikolassiccha@gmail.com>"]
+version = "0.1.0"
+
+[deps]
+Cobweb = "ec354790-cf28-43e8-bb59-b484409b7bad"
