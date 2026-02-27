@@ -40,7 +40,8 @@ end
 Base.parent(n::Node) = getfield(n, :parent)
 (n::Node)(args...; kwargs...) = Node(parent(n)(args...; kwargs...))
 Base.show(io, m::MIME"text/html", n::Node) = begin
-    n = deepcopy(parent(n)) 
+    n = parent(n)
+    n = Cobweb.Node(Cobweb.tag(n), copy(Cobweb.attrs(n)), copy(Cobweb.children(n))) 
     attrs = Cobweb.attrs(n)
     haskey(attrs, :(-)) && (attrs[:(_)] = pop!(attrs, :(-)))
     filter!(Cobweb.children(n)) do tag

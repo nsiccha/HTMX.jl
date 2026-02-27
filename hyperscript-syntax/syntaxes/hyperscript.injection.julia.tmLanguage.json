@@ -8,9 +8,10 @@
   "repository": {
 
     "hyperscript-assign": {
-      "comment": "Matches _=\"...\" and _='...' in Julia source (e.g. inside html strings)",
+      "comment": "Matches _=\"...\" and _='...' in Julia source",
       "patterns": [
         {
+          "comment": "Double-quoted: allow single-quoted strings inside, not double",
           "name": "meta.embedded.hyperscript",
           "begin": "(_)\\s*=\\s*\"",
           "end": "\"",
@@ -19,10 +20,20 @@
           },
           "contentName": "source.hyperscript",
           "patterns": [
-            { "include": "source.hyperscript" }
+            { "include": "source.hyperscript#comment" },
+            { "include": "source.hyperscript#string-single" },
+            { "include": "source.hyperscript#number" },
+            { "include": "source.hyperscript#constant" },
+            { "include": "source.hyperscript#control" },
+            { "include": "source.hyperscript#command" },
+            { "include": "source.hyperscript#reference" },
+            { "include": "source.hyperscript#event" },
+            { "include": "source.hyperscript#selector" },
+            { "include": "source.hyperscript#operator" }
           ]
         },
         {
+          "comment": "Single-quoted: allow double-quoted strings inside, not single",
           "name": "meta.embedded.hyperscript",
           "begin": "(_)\\s*=\\s*'",
           "end": "'",
@@ -31,14 +42,23 @@
           },
           "contentName": "source.hyperscript",
           "patterns": [
-            { "include": "source.hyperscript" }
+            { "include": "source.hyperscript#comment" },
+            { "include": "source.hyperscript#string-double" },
+            { "include": "source.hyperscript#number" },
+            { "include": "source.hyperscript#constant" },
+            { "include": "source.hyperscript#control" },
+            { "include": "source.hyperscript#command" },
+            { "include": "source.hyperscript#reference" },
+            { "include": "source.hyperscript#event" },
+            { "include": "source.hyperscript#selector" },
+            { "include": "source.hyperscript#operator" }
           ]
         }
       ]
     },
 
     "hyperscript-macro": {
-      "comment": "Matches the _\"...\" and _\"\"\"...\"\"\"  Julia string macros",
+      "comment": "Matches _\"...\" and _\"\"\"...\"\"\" Julia string macros — only double-quoted so allow single inside",
       "patterns": [
         {
           "name": "meta.embedded.hyperscript",
@@ -49,7 +69,16 @@
           },
           "contentName": "source.hyperscript",
           "patterns": [
-            { "include": "source.hyperscript" }
+            { "include": "source.hyperscript#comment" },
+            { "include": "source.hyperscript#string-single" },
+            { "include": "source.hyperscript#number" },
+            { "include": "source.hyperscript#constant" },
+            { "include": "source.hyperscript#control" },
+            { "include": "source.hyperscript#command" },
+            { "include": "source.hyperscript#reference" },
+            { "include": "source.hyperscript#event" },
+            { "include": "source.hyperscript#selector" },
+            { "include": "source.hyperscript#operator" }
           ]
         },
         {
@@ -61,7 +90,16 @@
           },
           "contentName": "source.hyperscript",
           "patterns": [
-            { "include": "source.hyperscript" }
+            { "include": "source.hyperscript#comment" },
+            { "include": "source.hyperscript#string-single" },
+            { "include": "source.hyperscript#number" },
+            { "include": "source.hyperscript#constant" },
+            { "include": "source.hyperscript#control" },
+            { "include": "source.hyperscript#command" },
+            { "include": "source.hyperscript#reference" },
+            { "include": "source.hyperscript#event" },
+            { "include": "source.hyperscript#selector" },
+            { "include": "source.hyperscript#operator" }
           ]
         }
       ]

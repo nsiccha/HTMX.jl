@@ -9,6 +9,7 @@
       "comment": "Inject hyperscript highlighting into _='...' and _=\"...\" attributes",
       "patterns": [
         {
+          "comment": "Double-quoted attribute: allow single-quoted strings inside, not double",
           "name": "meta.embedded.hyperscript",
           "begin": "(_)\\s*=\\s*\"",
           "end": "\"",
@@ -17,10 +18,20 @@
           },
           "contentName": "source.hyperscript",
           "patterns": [
-            { "include": "source.hyperscript" }
+            { "include": "source.hyperscript#comment" },
+            { "include": "source.hyperscript#string-single" },
+            { "include": "source.hyperscript#number" },
+            { "include": "source.hyperscript#constant" },
+            { "include": "source.hyperscript#control" },
+            { "include": "source.hyperscript#command" },
+            { "include": "source.hyperscript#reference" },
+            { "include": "source.hyperscript#event" },
+            { "include": "source.hyperscript#selector" },
+            { "include": "source.hyperscript#operator" }
           ]
         },
         {
+          "comment": "Single-quoted attribute: allow double-quoted strings inside, not single",
           "name": "meta.embedded.hyperscript",
           "begin": "(_)\\s*=\\s*'",
           "end": "'",
@@ -29,7 +40,16 @@
           },
           "contentName": "source.hyperscript",
           "patterns": [
-            { "include": "source.hyperscript" }
+            { "include": "source.hyperscript#comment" },
+            { "include": "source.hyperscript#string-double" },
+            { "include": "source.hyperscript#number" },
+            { "include": "source.hyperscript#constant" },
+            { "include": "source.hyperscript#control" },
+            { "include": "source.hyperscript#command" },
+            { "include": "source.hyperscript#reference" },
+            { "include": "source.hyperscript#event" },
+            { "include": "source.hyperscript#selector" },
+            { "include": "source.hyperscript#operator" }
           ]
         }
       ]
