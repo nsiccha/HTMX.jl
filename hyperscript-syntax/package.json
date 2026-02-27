@@ -1,0 +1,38 @@
+{
+  "name": "hyperscript-syntax",
+  "displayName": "Hyperscript Syntax",
+  "description": "Syntax highlighting for _hyperscript in HTML attributes and standalone .hs files",
+  "version": "0.1.0",
+  "engines": { "vscode": "^1.74.0" },
+  "categories": ["Programming Languages"],
+  "contributes": {
+
+    "languages": [
+      {
+        "id": "hyperscript",
+        "aliases": ["Hyperscript", "hyperscript"],
+        "extensions": [".hs"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+
+    "grammars": [
+      {
+        "language": "hyperscript",
+        "scopeName": "source.hyperscript",
+        "path": "./syntaxes/hyperscript.tmLanguage.json"
+      },
+      {
+        "scopeName": "hyperscript.injection",
+        "path": "./syntaxes/hyperscript.injection.tmLanguage.json",
+        "injectTo": ["text.html.basic", "text.html.derivative"]
+      },
+      {
+        "scopeName": "hyperscript.injection.julia",
+        "path": "./syntaxes/hyperscript.injection.julia.tmLanguage.json",
+        "injectTo": ["source.julia"]
+      }
+    ]
+
+  }
+}

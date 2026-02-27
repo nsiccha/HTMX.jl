@@ -1,0 +1,71 @@
+{
+  "scopeName": "hyperscript.injection.julia",
+  "injectionSelector": "L:source.julia",
+  "patterns": [
+    { "include": "#hyperscript-assign" },
+    { "include": "#hyperscript-macro" }
+  ],
+  "repository": {
+
+    "hyperscript-assign": {
+      "comment": "Matches _=\"...\" and _='...' in Julia source (e.g. inside html strings)",
+      "patterns": [
+        {
+          "name": "meta.embedded.hyperscript",
+          "begin": "(_)\\s*=\\s*\"",
+          "end": "\"",
+          "beginCaptures": {
+            "1": { "name": "entity.other.attribute-name.hyperscript" }
+          },
+          "contentName": "source.hyperscript",
+          "patterns": [
+            { "include": "source.hyperscript" }
+          ]
+        },
+        {
+          "name": "meta.embedded.hyperscript",
+          "begin": "(_)\\s*=\\s*'",
+          "end": "'",
+          "beginCaptures": {
+            "1": { "name": "entity.other.attribute-name.hyperscript" }
+          },
+          "contentName": "source.hyperscript",
+          "patterns": [
+            { "include": "source.hyperscript" }
+          ]
+        }
+      ]
+    },
+
+    "hyperscript-macro": {
+      "comment": "Matches the _\"...\" and _\"\"\"...\"\"\"  Julia string macros",
+      "patterns": [
+        {
+          "name": "meta.embedded.hyperscript",
+          "begin": "\\b(_)\"\"\"",
+          "end": "\"\"\"",
+          "beginCaptures": {
+            "1": { "name": "support.function.macro.hyperscript" }
+          },
+          "contentName": "source.hyperscript",
+          "patterns": [
+            { "include": "source.hyperscript" }
+          ]
+        },
+        {
+          "name": "meta.embedded.hyperscript",
+          "begin": "\\b(_)\"",
+          "end": "\"",
+          "beginCaptures": {
+            "1": { "name": "support.function.macro.hyperscript" }
+          },
+          "contentName": "source.hyperscript",
+          "patterns": [
+            { "include": "source.hyperscript" }
+          ]
+        }
+      ]
+    }
+
+  }
+}

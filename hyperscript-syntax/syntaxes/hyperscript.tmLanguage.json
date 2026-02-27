@@ -1,0 +1,122 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Hyperscript",
+  "scopeName": "source.hyperscript",
+  "patterns": [
+    { "include": "#comment" },
+    { "include": "#string-double" },
+    { "include": "#string-single" },
+    { "include": "#number" },
+    { "include": "#constant" },
+    { "include": "#control" },
+    { "include": "#command" },
+    { "include": "#reference" },
+    { "include": "#event" },
+    { "include": "#selector" },
+    { "include": "#operator" }
+  ],
+  "repository": {
+
+    "comment": {
+      "name": "comment.line.hyperscript",
+      "match": "--[^\r\n]*"
+    },
+
+    "string-double": {
+      "name": "string.quoted.double.hyperscript",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [
+        { "name": "constant.character.escape.hyperscript", "match": "\\\\." }
+      ]
+    },
+
+    "string-single": {
+      "name": "string.quoted.single.hyperscript",
+      "begin": "'",
+      "end": "'",
+      "patterns": [
+        { "name": "constant.character.escape.hyperscript", "match": "\\\\." }
+      ]
+    },
+
+    "number": {
+      "name": "constant.numeric.hyperscript",
+      "match": "\\b-?(?:0x[0-9A-Fa-f]+|\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?)\\b"
+    },
+
+    "constant": {
+      "name": "constant.language.hyperscript",
+      "match": "\\b(true|false|null|undefined|Infinity|NaN|no|nothing|empty)\\b"
+    },
+
+    "control": {
+      "comment": "Control flow and structural keywords",
+      "name": "keyword.control.hyperscript",
+      "match": "\\b(if|else|unless|repeat|for|while|until|end|return|exit|halt|throw|catch|finally|break|continue|async|js|belay)\\b"
+    },
+
+    "command": {
+      "comment": "Action / command keywords — the verbs of hyperscript",
+      "name": "keyword.other.command.hyperscript",
+      "match": "\\b(on|set|get|call|send|trigger|toggle|add|remove|take|put|make|append|prepend|log|wait|fetch|settle|transition|measure|pick|zip|encode|decode|tell|go|to|from|into|with|without|by|init|def|then|now|after|before)\\b"
+    },
+
+    "reference": {
+      "comment": "Pronouns and target references",
+      "name": "variable.language.hyperscript",
+      "match": "\\b(me|my|its|it|I|the|a|an|closest|first|last|next|previous|parent|window|document|body|detail|result|event|target|sender|host)\\b"
+    },
+
+    "event": {
+      "comment": "Common DOM and htmx event names following 'on'",
+      "patterns": [
+        {
+          "name": "entity.name.function.hyperscript",
+          "match": "(?<=\\bon\\s{1,20})(?:htmx:[A-Za-z:]+|[a-z][a-zA-Z]+(?::[a-zA-Z]+)*)"
+        }
+      ]
+    },
+
+    "selector": {
+      "comment": "CSS selector literals — #id, .class, element references",
+      "patterns": [
+        {
+          "name": "string.other.selector.id.hyperscript",
+          "match": "#[A-Za-z_-][A-Za-z0-9_-]*"
+        },
+        {
+          "name": "string.other.selector.class.hyperscript",
+          "match": "\\.[A-Za-z_-][A-Za-z0-9_-]*"
+        },
+        {
+          "name": "string.other.selector.attribute.hyperscript",
+          "match": "\\[[^\\]]+\\]"
+        }
+      ]
+    },
+
+    "operator": {
+      "comment": "Logical, comparison, and arithmetic operators",
+      "patterns": [
+        {
+          "name": "keyword.operator.logical.hyperscript",
+          "match": "\\b(and|or|not|in|of|is|matches|contains|starts with|ends with)\\b"
+        },
+        {
+          "name": "keyword.operator.comparison.hyperscript",
+          "match": "(<|>|<=|>=|==|!=)"
+        },
+        {
+          "name": "keyword.operator.arithmetic.hyperscript",
+          "match": "(\\+|-|\\*|/|%)"
+        },
+        {
+          "name": "keyword.operator.assignment.hyperscript",
+          "match": "(?<![=!<>])=(?!=)"
+        }
+      ]
+    }
+
+  }
+}

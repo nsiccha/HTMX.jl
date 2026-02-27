@@ -1,0 +1,38 @@
+{
+  "scopeName": "hyperscript.injection",
+  "injectionSelector": "L:text.html",
+  "patterns": [
+    { "include": "#hyperscript-attr" }
+  ],
+  "repository": {
+    "hyperscript-attr": {
+      "comment": "Inject hyperscript highlighting into _='...' and _=\"...\" attributes",
+      "patterns": [
+        {
+          "name": "meta.embedded.hyperscript",
+          "begin": "(_)\\s*=\\s*\"",
+          "end": "\"",
+          "beginCaptures": {
+            "1": { "name": "entity.other.attribute-name.hyperscript" }
+          },
+          "contentName": "source.hyperscript",
+          "patterns": [
+            { "include": "source.hyperscript" }
+          ]
+        },
+        {
+          "name": "meta.embedded.hyperscript",
+          "begin": "(_)\\s*=\\s*'",
+          "end": "'",
+          "beginCaptures": {
+            "1": { "name": "entity.other.attribute-name.hyperscript" }
+          },
+          "contentName": "source.hyperscript",
+          "patterns": [
+            { "include": "source.hyperscript" }
+          ]
+        }
+      ]
+    }
+  }
+}
