@@ -1,0 +1,46 @@
+---
+title: "HTMX.jl"
+---
+
+`HTMX.jl` provides a Julia interface for building [HTMX](https://htmx.org)-powered HTML using a hyperscript-like syntax backed by [Cobweb.jl](https://github.com/JuliaWeb/Cobweb.jl).
+
+```{julia}
+#| code-fold: true
+#| code-summary: "Setup"
+cd(dirname(Base.active_project()))
+using HTMX
+```
+
+## Basic usage
+
+Use `h.tagname(...)` to create HTML nodes:
+
+```{julia}
+h.div(class="container")(
+    h.h1("Hello, HTMX!"),
+    h.p("This is a paragraph.")
+)
+```
+
+## Hyperscript syntax
+
+The `@__str` macro (via `_"..."`) lets you embed [Hyperscript](https://hyperscript.org) behavior strings directly in nodes:
+
+```{julia}
+h.button(
+    _"""on click toggle .hidden on #menu""",
+    "Toggle menu"
+)
+```
+
+## `auto` helper
+
+`auto` converts arbitrary values to HTML fragments. It handles strings, arrays, and `Pair`s (for out-of-band HTMX swaps):
+
+```{julia}
+auto("raw html string"; wrap=identity)
+```
+
+```{julia}
+auto(["<li>one</li>", "<li>two</li>"]; wrap=identity)
+```
