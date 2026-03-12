@@ -1,11 +1,12 @@
 module HTMX
 
 import Cobweb
-export auto, @__str
+export auto, h, Node, @__str
 
 auto(x; wrap) = wrap(repr("text/html", x))
+auto(x::AbstractString; wrap) = wrap(x)
 auto(x::AbstractArray; wrap) = wrap(join(auto.(x; wrap=identity), "\n"))
-auto((content, target)::Pair; wrap) = auto(h.div(hx_swap_oob=target)(content); wrap)
+auto((content, id)::Pair; wrap) = auto(h.div(id=id, hx_swap_oob="true")(content); wrap)
 
 struct HyperscriptString <: AbstractString
     data::String
@@ -32,13 +33,15 @@ Base.:*(a::HyperscriptString, b::HyperscriptString) = HyperscriptString(a.data *
 macro __str(ex)
     :($HyperscriptString($(esc(Meta.parse("\"$ex\"")))))
 end
+_flatten(args) = mapreduce(a -> isa(a, AbstractVector) ? a : [a], vcat, args; init=Any[])
+
 struct Node
     parent::Cobweb.Node
     Node(n::Cobweb.Node) = new(n)
-    Node(args...; kwargs...) = new(Cobweb.h(args...; kwargs...))
+    Node(tag, args...; kwargs...) = new(Cobweb.h(tag, _flatten(args)...; kwargs...))
 end
 Base.parent(n::Node) = getfield(n, :parent)
-(n::Node)(args...; kwargs...) = Node(parent(n)(args...; kwargs...))
+(n::Node)(args...; kwargs...) = Node(parent(n)(_flatten(args)...; kwargs...))
 Base.show(io, m::MIME"text/html", n::Node) = begin
     n = parent(n)
     n = Cobweb.Node(Cobweb.tag(n), copy(Cobweb.attrs(n)), copy(Cobweb.children(n))) 
