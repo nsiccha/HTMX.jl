@@ -71,6 +71,7 @@ macro __str(ex)
     :($HyperscriptString($(esc(Meta.parse("\"$ex\"")))))
 end
 _flatten(args) = mapreduce(a -> isa(a, AbstractVector) ? a : [a], vcat, args; init=Any[])
+_filter_attrs(kwargs) = (k => (v === true ? "true" : string(v)) for (k, v) in kwargs if v !== nothing && v !== false)
 
 """
     Node(tag, children...; attributes...)
@@ -90,10 +91,10 @@ attribute (for [hyperscript](https://hyperscript.org/)).
 struct Node
     parent::Cobweb.Node
     Node(n::Cobweb.Node) = new(n)
-    Node(tag, args...; kwargs...) = new(Cobweb.h(tag, _flatten(args)...; kwargs...))
+    Node(tag, args...; kwargs...) = new(Cobweb.h(tag, _flatten(args)...; _filter_attrs(kwargs)...))
 end
 Base.parent(n::Node) = getfield(n, :parent)
-(n::Node)(args...; kwargs...) = Node(parent(n)(_flatten(args)...; kwargs...))
+(n::Node)(args...; kwargs...) = Node(parent(n)(_flatten(args)...; _filter_attrs(kwargs)...))
 Base.show(io, m::MIME"text/html", n::Node) = begin
     n = parent(n)
     n = Cobweb.Node(Cobweb.tag(n), copy(Cobweb.attrs(n)), copy(Cobweb.children(n))) 

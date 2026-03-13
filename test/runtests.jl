@@ -62,6 +62,43 @@ end
     @test !occursin("hidden", rendered2)
 end
 
+@testset "nothing attributes are omitted" begin
+    # nothing-valued attributes should not appear in output
+    node = h.option("x"; selected=nothing)
+    rendered = html(node)
+    @test !occursin("selected", rendered)
+    @test occursin(">x<", rendered)
+
+    # Mix of nothing and real attributes
+    node2 = h.input(; type="text", disabled=nothing, class="foo")
+    rendered2 = html(node2)
+    @test occursin("type=\"text\"", rendered2)
+    @test occursin("class=\"foo\"", rendered2)
+    @test !occursin("disabled", rendered2)
+end
+
+@testset "Bool attribute values" begin
+    # true renders as bare attribute (same as "true")
+    node = h.input(; checked=true)
+    rendered = html(node)
+    @test occursin("checked", rendered)
+    @test !occursin("checked=\"true\"", rendered)
+
+    # false is omitted (same as nothing)
+    node2 = h.input(; checked=false)
+    rendered2 = html(node2)
+    @test !occursin("checked", rendered2)
+end
+
+@testset "nothing/Bool attributes via call syntax" begin
+    node = h.div(class="a")(; selected=nothing, hidden=true)
+    rendered = html(node)
+    @test occursin("class=\"a\"", rendered)
+    @test !occursin("selected", rendered)
+    @test occursin("hidden", rendered)
+    @test !occursin("hidden=\"true\"", rendered)
+end
+
 @testset "Hyperscript _ attribute via HyperscriptString children" begin
     # HyperscriptString children get moved to the _ attribute
     hs = HTMX.HyperscriptString("on click log 'hi'")
