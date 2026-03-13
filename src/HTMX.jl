@@ -77,7 +77,8 @@ _filter_attrs(kwargs) = (k => (v === true ? "true" : string(v)) for (k, v) in kw
     Node(tag, children...; attributes...)
 
 Immutable wrapper around `Cobweb.Node`. Keyword arguments become HTML attributes
-(underscores are converted to hyphens, e.g. `hx_get` → `hx-get`). Positional
+(underscores are converted to hyphens, e.g. `hx_get` → `hx-get`). Attributes set
+to `nothing` or `false` are omitted; `true` renders as a bare attribute. Positional
 arguments become children.
 
 Use call syntax to append children or merge attributes:
@@ -120,7 +121,8 @@ standard way to build elements:
     )
 
 Keyword arguments become attributes (underscores → hyphens). Positional arguments
-become children. Boolean attribute `"true"` renders as a bare attribute; `"false"` is omitted.
+become children. Attributes set to `nothing` or `false` are omitted; `true` renders
+as a bare attribute (e.g. `checked` not `checked="true"`).
 """
 h(tag, args...; kwargs...) = Node(tag, args...; kwargs...)
 Base.getproperty(::typeof(h), tag::Symbol) = (args...; kwargs...)->h(tag, args...; kwargs...)
