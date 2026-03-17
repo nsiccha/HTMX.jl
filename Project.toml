@@ -10,7 +10,9 @@ Cobweb = "ec354790-cf28-43e8-bb59-b484409b7bad"
 julia = "1"
 
 [extras]
+Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+TestModules = "63c02187-99fd-4e5c-aaf0-4d6bfebc181c"
 
 [targets]
-test = ["Test"]
+test = ["Random", "Test", "TestModules"]
