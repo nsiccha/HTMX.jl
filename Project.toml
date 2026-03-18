@@ -6,6 +6,9 @@ version = "0.1.0"
 [deps]
 Cobweb = "ec354790-cf28-43e8-bb59-b484409b7bad"
 
+[sources]
+TestModules = {url = "https://github.com/nsiccha/TestModules.jl"}
+
 [compat]
 julia = "1"
 
