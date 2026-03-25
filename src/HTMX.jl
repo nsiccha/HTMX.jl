@@ -146,43 +146,50 @@ function _collect_text(n)
     children_text
 end
 
-# Render a node tree as markdown lines
-function _node_to_markdown(io::IO, n; depth=0)
-    n = _unwrap(n)
-    if !(n isa Cobweb.Node)
-        print(io, string(n))
-        return
-    end
-    tag = string(Cobweb.tag(n))
-    children = Cobweb.children(n)
+const _md_mime = MIME"text/markdown"()
+
+# Fallback: any non-Node value renders as its string representation
+Base.show(io::IO, ::MIME"text/markdown", val) = print(io, string(val))
+
+# Strings pass through as-is
+Base.show(io::IO, ::MIME"text/markdown", val::AbstractString) = print(io, val)
+
+# Arrays: render each element
+Base.show(io::IO, m::MIME"text/markdown", val::AbstractArray) = foreach(v -> show(io, m, v), val)
+
+# Node: dispatch by tag
+function Base.show(io::IO, m::MIME"text/markdown", n::Node)
+    node = _unwrap(n)
+    node isa Cobweb.Node || return show(io, m, node)
+    tag = string(Cobweb.tag(node))
+    children = Cobweb.children(node)
 
     if tag in ("h1", "h2", "h3", "h4", "h5", "h6")
         level = parse(Int, tag[2])
-        println(io, "#"^level, " ", _collect_text(n))
+        println(io, "#"^level, " ", _collect_text(node))
     elseif tag == "p"
-        println(io, _collect_text(n))
+        println(io, _collect_text(node))
         println(io)
     elseif tag == "li"
-        println(io, "- ", _collect_text(n))
+        println(io, "- ", _collect_text(node))
     elseif tag == "pre"
         println(io, "```")
-        println(io, _collect_text(n))
+        println(io, _collect_text(node))
         println(io, "```")
     elseif tag == "hr"
         println(io, "---")
     elseif tag == "table"
-        _table_to_markdown(io, n)
+        _table_to_markdown(io, node)
+    elseif tag in ("script", "style", "meta", "link")
+        # skip non-content nodes
     elseif tag in ("div", "main", "section", "article", "body", "html", "head",
                     "span", "ul", "ol", "thead", "tbody", "tr", "details", "summary",
                     "form", "label", "nav", "header", "footer", "dl")
         for c in children
-            _node_to_markdown(io, c)
+            show(io, m, _unwrap(c))
         end
-    elseif tag == "script" || tag == "style" || tag == "meta" || tag == "link"
-        # skip non-content nodes
     else
-        # Fallback: render inline text
-        text = _collect_text(n)
+        text = _collect_text(node)
         isempty(strip(text)) || println(io, text)
     end
 end
@@ -208,7 +215,5 @@ function _table_to_markdown(io::IO, table)
     end
     println(io)
 end
-
-Base.show(io::IO, ::MIME"text/markdown", n::Node) = _node_to_markdown(io, n)
 
 end # module HTMX
