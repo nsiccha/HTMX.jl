@@ -186,7 +186,8 @@ function Base.show(io::IO, m::MIME"text/markdown", n::Node)
                     "span", "ul", "ol", "thead", "tbody", "tr", "details", "summary",
                     "form", "label", "nav", "header", "footer", "dl")
         for c in children
-            show(io, m, _unwrap(c))
+            c = _unwrap(c)
+            show(io, m, c isa Cobweb.Node ? Node(c) : c)
         end
     else
         text = _collect_text(node)
