@@ -12,7 +12,8 @@ Lightweight HTML builder wrapping [Cobweb.jl](https://github.com/JuliaComputing/
 module HTMX
 
 import Cobweb
-export auto, h, Node, @__str
+import Markdown
+export auto, h, Node, @__str, md_to_node
 
 """
     auto(x; wrap=identity)
@@ -216,5 +217,43 @@ function _table_to_markdown(io::IO, table)
     end
     println(io)
 end
+
+# --- Markdown AST → h.* Node conversion ---
+
+"""
+    md_to_node(md)
+
+Convert a markdown string or `Markdown.jl` AST into `h.*` HTML nodes.
+
+# Example
+```julia
+md_to_node("**bold** and `code`")
+md_to_node(Markdown.parse("**bold** and `code`"))
+# both => h.div(h.p(h.strong("bold"), " and ", h.code("code")))
+```
+"""
+md_to_node(s::AbstractString) = _md_to_node(Markdown.parse(s))
+md_to_node(x) = _md_to_node(x)
+
+# Internal recursive converter — handles Markdown AST nodes and string leaves
+_md_to_node(s::AbstractString) = s
+_md_to_node(md::Markdown.MD) = h.div(_md_to_node.(md.content)...)
+_md_to_node(p::Markdown.Paragraph) = h.p(_md_to_node.(p.content)...)
+_md_to_node(b::Markdown.Bold) = h.strong(_md_to_node.(b.text)...)
+_md_to_node(i::Markdown.Italic) = h.em(_md_to_node.(i.text)...)
+_md_to_node(c::Markdown.Code) = c.language == "" ? h.code(c.code) : h.pre(h.code(c.code))
+_md_to_node(l::Markdown.Link) = h.a(href=l.url)(_md_to_node.(l.text)...)
+_md_to_node(hdr::Markdown.Header{1}) = h.h1(_md_to_node.(hdr.text)...)
+_md_to_node(hdr::Markdown.Header{2}) = h.h2(_md_to_node.(hdr.text)...)
+_md_to_node(hdr::Markdown.Header{3}) = h.h3(_md_to_node.(hdr.text)...)
+_md_to_node(hdr::Markdown.Header{4}) = h.h4(_md_to_node.(hdr.text)...)
+_md_to_node(hdr::Markdown.Header{5}) = h.h5(_md_to_node.(hdr.text)...)
+_md_to_node(hdr::Markdown.Header{6}) = h.h6(_md_to_node.(hdr.text)...)
+_md_to_node(bq::Markdown.BlockQuote) = h.blockquote(_md_to_node.(bq.content)...)
+_md_to_node(list::Markdown.List) = begin
+    tag = list.ordered == -1 ? h.ul : h.ol
+    tag([h.li(_md_to_node.(item)...) for item in list.items]...)
+end
+_md_to_node(x) = string(x)
 
 end # module HTMX
