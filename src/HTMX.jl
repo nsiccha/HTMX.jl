@@ -28,7 +28,6 @@ Convert `x` to an HTML string, applying `wrap` to the result.
 auto(x; wrap) = wrap(repr("text/html", x))
 auto(x::AbstractString; wrap) = wrap(x)
 auto(x::AbstractArray; wrap) = wrap(join(auto.(x; wrap=identity), "\n"))
-auto((content, id)::Pair; wrap) = auto(h.div(id=id, hx_swap_oob="true")(content); wrap)
 
 """
     HyperscriptString(s::AbstractString)
@@ -108,6 +107,18 @@ Base.show(io, m::MIME"text/html", n::Node) = begin
         return false
     end
     show(io, m, n)
+end
+# Table elements (tr, td, th, thead, tbody, tfoot) are silently stripped by
+# the browser's innerHTML parser when they lack proper parent context.
+# Wrapping in <template> lets HTMX swap them correctly.
+const _table_tags = Set([:tr, :td, :th, :thead, :tbody, :tfoot, :caption, :colgroup, :col])
+_is_table_element(x::Node) = Cobweb.tag(parent(x)) in _table_tags
+_is_table_element(x) = false
+function auto((content, id)::Pair; wrap)
+    oob = content isa Node ? content(; id, hx_swap_oob="true") :
+        h.div(id=id, hx_swap_oob="true")(content)
+    _is_table_element(content) && (oob = h.template(oob))
+    auto(oob; wrap)
 end
 """
     h(tag, children...; attributes...)
