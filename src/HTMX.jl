@@ -109,6 +109,7 @@ Base.show(io, m::MIME"text/html", n::Node) = begin
     # Write opening tag ourselves to avoid Cobweb's "true" → bare attribute behavior
     print(io, '<', Cobweb.tag(cn))
     for (k, v) in attrs
+        v == "false" && continue
         print(io, ' ', k, '=', '"', v, '"')
     end
     print(io, '>')
