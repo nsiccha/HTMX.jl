@@ -97,16 +97,25 @@ end
 Base.parent(n::Node) = getfield(n, :parent)
 (n::Node)(args...; kwargs...) = Node(parent(n)(_flatten(args)...; _filter_attrs(kwargs)...))
 Base.show(io, m::MIME"text/html", n::Node) = begin
-    n = parent(n)
-    n = Cobweb.Node(Cobweb.tag(n), copy(Cobweb.attrs(n)), copy(Cobweb.children(n))) 
-    attrs = Cobweb.attrs(n)
+    cn = parent(n)
+    cn = Cobweb.Node(Cobweb.tag(cn), copy(Cobweb.attrs(cn)), copy(Cobweb.children(cn)))
+    attrs = Cobweb.attrs(cn)
     haskey(attrs, :(-)) && (attrs[:(_)] = pop!(attrs, :(-)))
-    filter!(Cobweb.children(n)) do tag
+    filter!(Cobweb.children(cn)) do tag
         isa(tag, HyperscriptString) || return true
         attrs[:(_)] = get(attrs, :(_), "") * "\n" * tag
         return false
     end
-    show(io, m, n)
+    # Write opening tag ourselves to avoid Cobweb's "true" → bare attribute behavior
+    print(io, '<', Cobweb.tag(cn))
+    for (k, v) in attrs
+        print(io, ' ', k, '=', '"', v, '"')
+    end
+    print(io, '>')
+    for child in Cobweb.children(cn)
+        showable("text/html", child) ? show(io, m, child) : print(io, child)
+    end
+    Cobweb.tag(cn) in Cobweb.VOID_ELEMENTS || print(io, "</", Cobweb.tag(cn), '>')
 end
 # Table elements (tr, td, th, thead, tbody, tfoot) are silently stripped by
 # the browser's innerHTML parser when they lack proper parent context.
