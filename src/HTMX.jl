@@ -275,6 +275,21 @@ _md_to_node(list::Markdown.List) = begin
     tag = list.ordered == -1 ? h.ul : h.ol
     tag([h.li(_md_to_node.(item)...) for item in list.items]...)
 end
+_md_to_node(::Markdown.HorizontalRule) = h.hr()
+_md_to_node(t::Markdown.Table) = begin
+    align_style(a::Symbol) = a === :l ? "text-align:left" :
+                             a === :c ? "text-align:center" :
+                             a === :r ? "text-align:right" : ""
+    cell(tag, content, a) = begin
+        kids = _md_to_node.(content)
+        style = align_style(a)
+        style == "" ? tag(kids...) : tag(; style=style)(kids...)
+    end
+    header, body = t.rows[1], @view t.rows[2:end]
+    thead = h.thead(h.tr([cell(h.th, c, get(t.align, i, :l)) for (i, c) in enumerate(header)]...))
+    tbody = h.tbody([h.tr([cell(h.td, c, get(t.align, i, :l)) for (i, c) in enumerate(row)]...) for row in body]...)
+    h.table(thead, tbody)
+end
 _md_to_node(x) = string(x)
 
 end # module HTMX
