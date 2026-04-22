@@ -179,42 +179,102 @@ Base.show(io::IO, ::MIME"text/markdown", val::AbstractString) = print(io, val)
 # Arrays: render each element
 Base.show(io::IO, m::MIME"text/markdown", val::AbstractArray) = foreach(v -> show(io, m, v), val)
 
-# Node: dispatch by tag
+# Node: dispatch by tag via _md(io, m, node, ::Val{tag})
 function Base.show(io::IO, m::MIME"text/markdown", n::Node)
     node = _unwrap(n)
     node isa Cobweb.Node || return show(io, m, node)
-    tag = string(Cobweb.tag(node))
-    children = Cobweb.children(node)
+    _md(io, m, node, Val(Cobweb.tag(node)))
+end
 
-    if tag in ("h1", "h2", "h3", "h4", "h5", "h6")
-        level = parse(Int, tag[2])
-        println(io, "#"^level, " ", _collect_text(node))
-    elseif tag == "p"
-        println(io, _collect_text(node))
-        println(io)
-    elseif tag == "li"
-        println(io, "- ", _collect_text(node))
-    elseif tag == "pre"
-        println(io, "```")
-        println(io, _collect_text(node))
-        println(io, "```")
-    elseif tag == "hr"
-        println(io, "---")
-    elseif tag == "table"
-        _table_to_markdown(io, node)
-    elseif tag in ("script", "style", "meta", "link")
-        # skip non-content nodes
-    elseif tag in ("div", "main", "section", "article", "body", "html", "head",
-                    "span", "ul", "ol", "thead", "tbody", "tr", "details", "summary",
-                    "form", "label", "nav", "header", "footer", "dl")
-        for c in children
-            c = _unwrap(c)
-            show(io, m, c isa Cobweb.Node ? Node(c) : c)
-        end
-    else
-        text = _collect_text(node)
-        isempty(strip(text)) || println(io, text)
+# Default: print collected text if non-empty (unknown tags fall here)
+function _md(io, m, node::Cobweb.Node, ::Val)
+    text = _collect_text(node)
+    isempty(strip(text)) || println(io, text)
+end
+
+# Recurse into children as if the node were transparent
+_md_recurse(io, m, node) = for c in Cobweb.children(node)
+    c = _unwrap(c)
+    show(io, m, c isa Cobweb.Node ? Node(c) : c)
+end
+
+# Headings h1..h6
+for lvl in 1:6
+    @eval _md(io, m, node::Cobweb.Node, ::Val{$(QuoteNode(Symbol("h$lvl")))}) =
+        println(io, $("#"^lvl), " ", _collect_text(node))
+end
+
+# Containers: recurse transparently
+for t in (:div, :main, :body, :html, :head,
+          :span, :ul, :ol, :thead, :tbody, :tr, :details, :summary,
+          :form, :label, :nav, :footer, :dl)
+    @eval _md(io, m, node::Cobweb.Node, ::Val{$(QuoteNode(t))}) = _md_recurse(io, m, node)
+end
+
+# Semantic blocks: emit a leading `---` divider so an agent reader can see
+# where each block starts. Only leading (not trailing), so adjacent blocks
+# produce a single divider between them rather than doubled.
+for t in (:article, :section)
+    @eval _md(io, m, node::Cobweb.Node, ::Val{$(QuoteNode(t))}) =
+        (println(io); println(io, "---"); println(io); _md_recurse(io, m, node); println(io))
+end
+
+# <header> is the label/title of its surrounding block — render as a level-3
+# heading so the structure is legible to an agent reader.
+_md(io, m, node::Cobweb.Node, ::Val{:header}) = println(io, "### ", _collect_text(node))
+
+# Non-content tags: skip
+for t in (:script, :style, :meta, :link)
+    @eval _md(io, m, node::Cobweb.Node, ::Val{$(QuoteNode(t))}) = nothing
+end
+
+# Block leaves
+_md(io, m, node::Cobweb.Node, ::Val{:p})     = (println(io, _collect_text(node)); println(io))
+_md(io, m, node::Cobweb.Node, ::Val{:li})    = println(io, "- ", _collect_text(node))
+_md(io, m, node::Cobweb.Node, ::Val{:pre})   = (println(io, "```"); println(io, _collect_text(node)); println(io, "```"))
+_md(io, m, node::Cobweb.Node, ::Val{:hr})    = println(io, "---")
+_md(io, m, node::Cobweb.Node, ::Val{:table}) = _table_to_markdown(io, node)
+
+# <title> → top-level heading (so a full page with <head><title>X</title></head> renders as "# X")
+_md(io, m, node::Cobweb.Node, ::Val{:title}) = println(io, "# ", _collect_text(node))
+
+# <blockquote> → "> "-prefixed lines
+function _md(io, m, node::Cobweb.Node, ::Val{:blockquote})
+    buf = IOBuffer()
+    _md_recurse(buf, m, node)
+    inner = rstrip(String(take!(buf)), '\n')
+    isempty(inner) && return
+    for line in split(inner, '\n')
+        println(io, "> ", line)
     end
+    println(io)
+end
+
+# <img> → ![alt](src)
+function _md(io, m, node::Cobweb.Node, ::Val{:img})
+    attrs = Cobweb.attrs(node)
+    src = get(attrs, :src, "")
+    isempty(src) && return
+    println(io, "![", get(attrs, :alt, ""), "](", src, ")")
+end
+
+# <figure><img><figcaption> → ![caption](src); fall back to recursion if no <img>
+function _md(io, m, node::Cobweb.Node, ::Val{:figure})
+    src = ""; alt = ""; caption = ""
+    for c in Cobweb.children(node)
+        cn = _unwrap(c)
+        cn isa Cobweb.Node || continue
+        t = Cobweb.tag(cn)
+        if t === :img && isempty(src)
+            a = Cobweb.attrs(cn)
+            src = get(a, :src, ""); alt = get(a, :alt, "")
+        elseif t === :figcaption
+            caption = _collect_text(cn)
+        end
+    end
+    isempty(src) && return _md_recurse(io, m, node)
+    label = isempty(caption) ? alt : caption
+    println(io, "![", label, "](", src, ")")
 end
 
 function _table_to_markdown(io::IO, table)
