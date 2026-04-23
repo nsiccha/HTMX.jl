@@ -350,6 +350,7 @@ _md_to_node(t::Markdown.Table) = begin
     tbody = h.tbody([h.tr([cell(h.td, c, get(t.align, i, :l)) for (i, c) in enumerate(row)]...) for row in body]...)
     h.table(thead, tbody)
 end
+_md_to_node(l::Markdown.LaTeX) = "\$\$$(l.formula)\$\$"
 _md_to_node(x) = string(x)
 
 end # module HTMX
