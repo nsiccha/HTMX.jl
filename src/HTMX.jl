@@ -16,13 +16,17 @@ import Markdown
 export auto, h, Node, @__str, md_to_node
 
 """
-    auto(x; wrap=identity)
+    auto(x; wrap)
 
-Convert `x` to an HTML string, applying `wrap` to the result.
+Convert `x` to an HTML string, applying `wrap` to the result. `wrap` is
+mandatory — pass `wrap=string` (or `wrap=identity`) when calling directly;
+web frameworks built on top of HTMX.jl typically inject their own wrapper.
 
 - `AbstractString` — passed through to `wrap`
 - `AbstractArray` — elements are recursively `auto`'d and joined with newlines
 - `Pair(content, id)` — wrapped in an OOB-swap `div` with `hx-swap-oob="true"`
+  (table elements like `<tr>` are additionally wrapped in `<template>` so HTMX
+  can swap them past the browser's `innerHTML` parser)
 - Anything else — rendered via `repr("text/html", x)`
 """
 auto(x; wrap) = wrap(repr("text/html", x))
@@ -78,8 +82,8 @@ _filter_attrs(kwargs) = (k => (v === true ? "true" : string(v)) for (k, v) in kw
 
 Immutable wrapper around `Cobweb.Node`. Keyword arguments become HTML attributes
 (underscores are converted to hyphens, e.g. `hx_get` → `hx-get`). Attributes set
-to `nothing` or `false` are omitted; `true` renders as a bare attribute. Positional
-arguments become children.
+to `nothing` or `false` are omitted; `true` renders as `name="true"` (browsers
+treat the quoted value as truthy). Positional arguments become children.
 
 Use call syntax to append children or merge attributes:
 
@@ -144,7 +148,7 @@ standard way to build elements:
 
 Keyword arguments become attributes (underscores → hyphens). Positional arguments
 become children. Attributes set to `nothing` or `false` are omitted; `true` renders
-as a bare attribute (e.g. `checked` not `checked="true"`).
+as `name="true"` (browsers treat the quoted value as truthy).
 """
 h(tag, args...; kwargs...) = Node(tag, args...; kwargs...)
 Base.getproperty(::typeof(h), tag::Symbol) = (args...; kwargs...)->h(tag, args...; kwargs...)
