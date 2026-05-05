@@ -341,13 +341,13 @@ _md_to_node(list::Markdown.List) = begin
 end
 _md_to_node(::Markdown.HorizontalRule) = h.hr()
 _md_to_node(t::Markdown.Table) = begin
-    align_style(a::Symbol) = a === :l ? "text-align:left" :
-                             a === :c ? "text-align:center" :
-                             a === :r ? "text-align:right" : ""
+    align_class(a::Symbol) = a === :l ? "u-text-left" :
+                             a === :c ? "u-text-center" :
+                             a === :r ? "u-text-right" : ""
     cell(tag, content, a) = begin
         kids = _md_to_node.(content)
-        style = align_style(a)
-        style == "" ? tag(kids...) : tag(; style=style)(kids...)
+        cls = align_class(a)
+        cls == "" ? tag(kids...) : tag(; class=cls)(kids...)
     end
     header, body = t.rows[1], @view t.rows[2:end]
     thead = h.thead(h.tr([cell(h.th, c, get(t.align, i, :l)) for (i, c) in enumerate(header)]...))
