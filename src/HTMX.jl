@@ -128,9 +128,10 @@ end
 const _table_tags = Set([:tr, :td, :th, :thead, :tbody, :tfoot, :caption, :colgroup, :col])
 _is_table_element(x::Node) = Cobweb.tag(parent(x)) in _table_tags
 _is_table_element(x) = false
+_make_oob(content::Node, id) = content(; id, hx_swap_oob="true")
+_make_oob(content, id) = h.div(id=id, hx_swap_oob="true")(content)
 function auto((content, id)::Pair; wrap)
-    oob = content isa Node ? content(; id, hx_swap_oob="true") :
-        h.div(id=id, hx_swap_oob="true")(content)
+    oob = _make_oob(content, id)
     _is_table_element(content) && (oob = h.template(oob))
     auto(oob; wrap)
 end
@@ -159,9 +160,9 @@ _unwrap(n::Node) = parent(n)
 _unwrap(n) = n
 
 # Collect all text content from a node tree (for inline rendering)
-function _collect_text(n)
-    n = _unwrap(n)
-    n isa Cobweb.Node || return string(n)
+_collect_text(n) = _collect_text_node(_unwrap(n))
+_collect_text_node(n) = string(n)
+function _collect_text_node(n::Cobweb.Node)
     tag = string(Cobweb.tag(n))
     children_text = join(_collect_text.(Cobweb.children(n)))
     tag == "strong" || tag == "b" ? "**$(children_text)**" :
@@ -184,11 +185,9 @@ Base.show(io::IO, ::MIME"text/markdown", val::AbstractString) = print(io, val)
 Base.show(io::IO, m::MIME"text/markdown", val::AbstractArray) = foreach(v -> show(io, m, v), val)
 
 # Node: dispatch by tag via _md(io, m, node, ::Val{tag})
-function Base.show(io::IO, m::MIME"text/markdown", n::Node)
-    node = _unwrap(n)
-    node isa Cobweb.Node || return show(io, m, node)
-    _md(io, m, node, Val(Cobweb.tag(node)))
-end
+Base.show(io::IO, m::MIME"text/markdown", n::Node) = _md_dispatch(io, m, _unwrap(n))
+_md_dispatch(io, m, node) = show(io, m, node)
+_md_dispatch(io, m, node::Cobweb.Node) = _md(io, m, node, Val(Cobweb.tag(node)))
 
 # Default: print collected text if non-empty (unknown tags fall here)
 function _md(io, m, node::Cobweb.Node, ::Val)
@@ -196,10 +195,12 @@ function _md(io, m, node::Cobweb.Node, ::Val)
     isempty(strip(text)) || println(io, text)
 end
 
+_wrap_for_show(c::Cobweb.Node) = Node(c)
+_wrap_for_show(c) = c
+
 # Recurse into children as if the node were transparent
 _md_recurse(io, m, node) = for c in Cobweb.children(node)
-    c = _unwrap(c)
-    show(io, m, c isa Cobweb.Node ? Node(c) : c)
+    show(io, m, _wrap_for_show(_unwrap(c)))
 end
 
 # Headings h1..h6
