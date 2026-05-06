@@ -131,13 +131,15 @@ end
 # the browser's innerHTML parser when they lack proper parent context.
 # Wrapping in <template> lets HTMX swap them correctly.
 const _table_tags = Set([:tr, :td, :th, :thead, :tbody, :tfoot, :caption, :colgroup, :col])
-_is_table_element(x::Node) = Cobweb.tag(parent(x)) in _table_tags
-_is_table_element(x) = false
 _make_oob(content::Node, id) = content(; id, hx_swap_oob="true")
 _make_oob(content, id) = h.div(id=id, hx_swap_oob="true")(content)
+# Wrap an OOB swap in a <template> when the content is a table sub-element.
+# Dispatched on Node vs anything else; non-Node content always passes through.
+_template_if_table(content::Node, oob) =
+    Cobweb.tag(parent(content)) in _table_tags ? h.template(oob) : oob
+_template_if_table(_, oob) = oob
 function auto((content, id)::Pair; wrap)
-    oob = _make_oob(content, id)
-    _is_table_element(content) && (oob = h.template(oob))
+    oob = _template_if_table(content, _make_oob(content, id))
     auto(oob; wrap)
 end
 """
@@ -268,42 +270,55 @@ function _md(io, m, node::Cobweb.Node, ::Val{:img})
     println(io, "![", get(attrs, :alt, ""), "](", src, ")")
 end
 
-_is_cobweb_node(::Cobweb.Node) = true
-_is_cobweb_node(_) = false
+# Per-child folds for figure/table parsing, dispatched on Cobweb.Node vs
+# anything else (text nodes, strings, etc.). The non-Node fallback is the
+# "skip" branch that the previous `_is_cobweb_node(...) || continue` guards
+# encoded; control flow now lives at the method boundary.
+_figure_visit(::Any, src, alt, caption) = (src, alt, caption)
+_figure_visit(cn::Cobweb.Node, src, alt, caption) = begin
+    t = Cobweb.tag(cn)
+    if t === :img && isempty(src)
+        a = Cobweb.attrs(cn)
+        return (get(a, :src, ""), get(a, :alt, ""), caption)
+    elseif t === :figcaption
+        return (src, alt, _collect_text(cn))
+    end
+    (src, alt, caption)
+end
 
 # <figure><img><figcaption> → ![caption](src); fall back to recursion if no <img>
 function _md(io, m, node::Cobweb.Node, ::Val{:figure})
     src = ""; alt = ""; caption = ""
     for c in Cobweb.children(node)
-        cn = _unwrap(c)
-        _is_cobweb_node(cn) || continue
-        t = Cobweb.tag(cn)
-        if t === :img && isempty(src)
-            a = Cobweb.attrs(cn)
-            src = get(a, :src, ""); alt = get(a, :alt, "")
-        elseif t === :figcaption
-            caption = _collect_text(cn)
-        end
+        src, alt, caption = _figure_visit(_unwrap(c), src, alt, caption)
     end
     isempty(src) && return _md_recurse(io, m, node)
     label = isempty(caption) ? alt : caption
     println(io, "![", label, "](", src, ")")
 end
 
+_collect_table_rows!(rows, ::Any) = nothing
+_collect_table_rows!(rows, section::Cobweb.Node) = for row in Cobweb.children(section)
+    _push_tr!(rows, _unwrap(row))
+end
+_push_tr!(rows, ::Any) = nothing
+_push_tr!(rows, r::Cobweb.Node) = string(Cobweb.tag(r)) == "tr" && push!(rows, r)
+
+_push_cell_text!(cells, ::Any) = nothing
+_push_cell_text!(cells, c::Cobweb.Node) = push!(cells, _collect_text(c))
+
 function _table_to_markdown(io::IO, table)
     table = _unwrap(table)
     rows = Cobweb.Node[]
     for section in Cobweb.children(table)
-        s = _unwrap(section)
-        _is_cobweb_node(s) || continue
-        for row in Cobweb.children(s)
-            r = _unwrap(row)
-            _is_cobweb_node(r) && string(Cobweb.tag(r)) == "tr" && push!(rows, r)
-        end
+        _collect_table_rows!(rows, _unwrap(section))
     end
     isempty(rows) && return
     for (i, row) in enumerate(rows)
-        cells = [_collect_text(c) for c in Cobweb.children(row) if _is_cobweb_node(_unwrap(c))]
+        cells = String[]
+        for c in Cobweb.children(row)
+            _push_cell_text!(cells, _unwrap(c))
+        end
         println(io, "| ", join(cells, " | "), " |")
         if i == 1
             println(io, "| ", join(fill("---", length(cells)), " | "), " |")
