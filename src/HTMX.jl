@@ -74,7 +74,14 @@ Create a [`HyperscriptString`](@ref) literal. Equivalent to `HyperscriptString("
 macro __str(ex)
     :($HyperscriptString($(esc(Meta.parse("\"$ex\"")))))
 end
-_flatten(args) = mapreduce(a -> isa(a, AbstractVector) ? a : [a], vcat, args; init=Any[])
+_as_flat(a::AbstractVector) = a
+_as_flat(a) = [a]
+_flatten(args) = mapreduce(_as_flat, vcat, args; init=Any[])
+
+# filter! predicate: keep non-HyperscriptString children; absorb HyperscriptStrings into the `_` attr
+_absorb_hyperscript!(attrs, tag::HyperscriptString) =
+    (attrs[:(_)] = get(attrs, :(_), "") * "\n" * tag; false)
+_absorb_hyperscript!(attrs, _) = true
 _filter_attrs(kwargs) = (k => (v === true ? "true" : string(v)) for (k, v) in kwargs if v !== nothing && v !== false)
 
 """
@@ -106,9 +113,7 @@ Base.show(io, m::MIME"text/html", n::Node) = begin
     attrs = Cobweb.attrs(cn)
     haskey(attrs, :(-)) && (attrs[:(_)] = pop!(attrs, :(-)))
     filter!(Cobweb.children(cn)) do tag
-        isa(tag, HyperscriptString) || return true
-        attrs[:(_)] = get(attrs, :(_), "") * "\n" * tag
-        return false
+        _absorb_hyperscript!(attrs, tag)
     end
     # Write opening tag ourselves to avoid Cobweb's "true" → bare attribute behavior
     print(io, '<', Cobweb.tag(cn))
