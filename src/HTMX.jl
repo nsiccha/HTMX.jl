@@ -268,12 +268,15 @@ function _md(io, m, node::Cobweb.Node, ::Val{:img})
     println(io, "![", get(attrs, :alt, ""), "](", src, ")")
 end
 
+_is_cobweb_node(::Cobweb.Node) = true
+_is_cobweb_node(_) = false
+
 # <figure><img><figcaption> → ![caption](src); fall back to recursion if no <img>
 function _md(io, m, node::Cobweb.Node, ::Val{:figure})
     src = ""; alt = ""; caption = ""
     for c in Cobweb.children(node)
         cn = _unwrap(c)
-        cn isa Cobweb.Node || continue
+        _is_cobweb_node(cn) || continue
         t = Cobweb.tag(cn)
         if t === :img && isempty(src)
             a = Cobweb.attrs(cn)
@@ -292,15 +295,15 @@ function _table_to_markdown(io::IO, table)
     rows = Cobweb.Node[]
     for section in Cobweb.children(table)
         s = _unwrap(section)
-        s isa Cobweb.Node || continue
+        _is_cobweb_node(s) || continue
         for row in Cobweb.children(s)
             r = _unwrap(row)
-            r isa Cobweb.Node && string(Cobweb.tag(r)) == "tr" && push!(rows, r)
+            _is_cobweb_node(r) && string(Cobweb.tag(r)) == "tr" && push!(rows, r)
         end
     end
     isempty(rows) && return
     for (i, row) in enumerate(rows)
-        cells = [_collect_text(c) for c in Cobweb.children(row) if _unwrap(c) isa Cobweb.Node]
+        cells = [_collect_text(c) for c in Cobweb.children(row) if _is_cobweb_node(_unwrap(c))]
         println(io, "| ", join(cells, " | "), " |")
         if i == 1
             println(io, "| ", join(fill("---", length(cells)), " | "), " |")
