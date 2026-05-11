@@ -6,9 +6,8 @@ using TestModules
 
 include("test/runtests.jl")
 
-pkg_root() = dirname(dirname(@__DIR__))
-src_dir() = joinpath(pkg_root(), "src")
-test_dir() = joinpath(pkg_root(), "test")
+pkg_dir(kind::Symbol) = joinpath(dirname(dirname(@__DIR__)), String(kind))
+list_jl(kind::Symbol) = filter(f -> endswith(f, ".jl"), readdir(pkg_dir(kind)))
 
 @htmx struct AppContext
     
@@ -37,17 +36,14 @@ test_dir() = joinpath(pkg_root(), "test")
 
     @get src() = h.div(
         h.h1("Source files"),
-        h.h2("src/"),
-        h.ul([h.li(h.a(href=__self__/"src_file"/"src"/f)(f))
-              for f in filter(f -> endswith(f, ".jl"), readdir(src_dir()))]...),
-        h.h2("test/"),
-        h.ul([h.li(h.a(href=__self__/"src_file"/"test"/f)(f))
-              for f in filter(f -> endswith(f, ".jl"), readdir(test_dir()))]...),
+        (h.div(
+            h.h2("$kind/"),
+            h.ul([h.li(h.a(href=__self__/"src_file/$kind/$f")(f)) for f in list_jl(kind)]...),
+        ) for kind in (:src, :test))...,
     )
 
     @get src_file(kind::Symbol, name) = begin
-        dir = kind === :src ? src_dir() : test_dir()
-        fpath = joinpath(dir, name)
+        fpath = joinpath(pkg_dir(kind), name)
         isfile(fpath) || error("File not found: $fpath")
         h.div(
             h.h1(h.a(href=__self__/"src")("< "), "$kind/$name"),
