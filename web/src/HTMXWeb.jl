@@ -12,14 +12,15 @@ test_dir() = joinpath(pkg_root(), "test")
 
 @htmx struct AppContext
     
-    page(content) = htmx(h.body(h.main(class="container")(content)); pico_version="2")
+    __page__(content) = htmx(h.main(class="container")(content); pico_version="2")
 
-    @get index = page[h.div(
+    @get index() = h.div(
         h.h1("HTMX.jl"),
         h.nav(
             h.ul(
-                h.li(h.a(href="/src")("Source files")),
-                h.li(h.a(href="/tests")("Tests")),
+                h.li(h.a(href=__self__/"src")("Source files")),
+                h.li(h.a(href=__self__/"tests")("Tests")),
+                h.li(h.a(href=__self__/"structure")("DO type structure browser")),
             ),
         ),
         h.h2("Package overview"),
@@ -32,32 +33,29 @@ test_dir() = joinpath(pkg_root(), "test")
             h.li("HyperscriptString support for _ attribute"),
             h.li("auto() response helper with OOB swap support"),
         ),
-    )]
+    )
 
-    @get src = begin
-        files = filter(f -> endswith(f, ".jl"), readdir(src_dir()))
-        test_files = filter(f -> endswith(f, ".jl"), readdir(test_dir()))
-        page[h.div(
-            h.h1("Source files"),
-            h.h2("src/"),
-            h.ul([h.li(h.a(href="/src/src_$f")(f)) for f in files]...),
-            h.h2("test/"),
-            h.ul([h.li(h.a(href="/src/test_$f")(f)) for f in test_files]...),
-        )]
-    end
+    @get src() = h.div(
+        h.h1("Source files"),
+        h.h2("src/"),
+        h.ul([h.li(h.a(href=__self__/"src_file"/"src"/f)(f))
+              for f in filter(f -> endswith(f, ".jl"), readdir(src_dir()))]...),
+        h.h2("test/"),
+        h.ul([h.li(h.a(href=__self__/"src_file"/"test"/f)(f))
+              for f in filter(f -> endswith(f, ".jl"), readdir(test_dir()))]...),
+    )
 
-    @get src_file(name) = begin
-        parts = split(name, "_"; limit=2)
-        dir = parts[1] == "src" ? src_dir() : test_dir()
-        fname = String(parts[2])
-        fpath = joinpath(dir, fname)
+    @get src_file(kind::Symbol, name) = begin
+        dir = kind === :src ? src_dir() : test_dir()
+        fpath = joinpath(dir, name)
         isfile(fpath) || error("File not found: $fpath")
-        content = read(fpath, String)
-        page[h.div(
-            h.h1(h.a(href="/src")("< "), parts[1] * "/" * fname),
-            h.pre(h.code(content)),
-        )]
+        h.div(
+            h.h1(h.a(href=__self__/"src")("< "), "$kind/$name"),
+            h.pre(h.code(read(fpath, String))),
+        )
     end
+
+    @include structure = HTMXObjects.StructureRoutes(; root=AppContext)
 
     @include tests = TestRoutes(; __req__, test_module=@__MODULE__)
 end
