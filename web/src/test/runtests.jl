@@ -1,6 +1,5 @@
 using TestModules
 using HTMX
-using Random
 
 # Helper
 html(node) = repr("text/html", node)
