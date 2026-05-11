@@ -12,7 +12,7 @@ test_dir() = joinpath(pkg_root(), "test")
 
 @htmx struct AppContext
     
-    __page__(content) = htmx(h.main(class="container")(content); pico_version="2")
+    __page__(content) = HTMXObjects.pico_page(content)
 
     @get index() = h.div(
         h.h1("HTMX.jl"),
