@@ -7,9 +7,10 @@ A Julia interface for building HTMX-powered HTML using hyperscript syntax, backe
 
 ## Features
 
-- **Hyperscript syntax**: build HTML elements with `h.div(...)`, `h.span(...)`, etc.
-- **Hyperscript strings**: use `_"..."` string macros for inline element creation
-- **`auto` helper**: convenient utilities for out-of-band (OOB) swaps
+- **Tag-based builder**: build HTML elements with `h.div(...)`, `h.span(...)`, etc.
+- **Hyperscript literals**: use `_"..."` string macros to embed [Hyperscript](https://hyperscript.org/) snippets into the `_` attribute
+- **`auto` helper**: convenient utilities for out-of-band (OOB) swaps, including the `<template>` workaround for table elements
+- **Markdown round-trip**: `show(io, MIME"text/markdown"(), node)` and `md_to_node(s)` convert between `h.*` trees and Markdown
 
 ## Installation
 
