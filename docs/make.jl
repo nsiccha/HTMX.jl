@@ -1,4 +1,10 @@
 using Documenter, DocumenterVitepress, HTMX
+import HTMXObjects
+
+# Sync the canonical `htmxo-embed.ts` (+ companion CSS) into our theme
+# dir before DocumenterVitepress runs. The theme's `index.ts` imports
+# from it.
+HTMXObjects.vitepress_theme_install(joinpath(@__DIR__, "src", ".vitepress", "theme"))
 
 makedocs(
     sitename = "HTMX.jl",
@@ -9,8 +15,9 @@ makedocs(
         devbranch = "dev",
     ),
     pages = [
-        "Home" => "index.md",
-        "API"  => "api.md",
+        "Home"    => "index.md",
+        "Gallery" => "gallery.md",
+        "API"     => "api.md",
     ],
     checkdocs = :none,
     warnonly = true,
