@@ -8,5 +8,5 @@ HTMXObjects = "b12ef442-5798-4353-80f3-9562b03a0cb6"
 path = ".."
 
 [sources.HTMXObjects]
-url = "git@github.com:nsiccha/HTMXObjects.jl.git"
+url = "https://github.com/nsiccha/HTMXObjects.jl.git"
 rev = "dev"
