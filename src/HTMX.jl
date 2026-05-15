@@ -368,18 +368,25 @@ _md_to_node(t::Markdown.Table) = begin
     align_attr(a::Symbol) = a === :l ? "left" :
                             a === :c ? "center" :
                             a === :r ? "right" : ""
-    cell(tag, content, a) = begin
+    th_cell(content, a, i) = begin
+        kids = _md_to_node.(content)
+        # Wires into HTMXObjects' sortable_table_js() if loaded on the page;
+        # guarded so a click without that script is a silent no-op (no
+        # "sortTable is not defined" thrown).
+        onclick = "if(window.sortTable)sortTable($(i-1),this)"
+        al = align_attr(a)
+        al == "" ? h.th(; onclick, class="u-pointer")(kids...) :
+                   h.th(; align=al, onclick, class="u-pointer")(kids...)
+    end
+    td_cell(content, a) = begin
         kids = _md_to_node.(content)
         al = align_attr(a)
-        al == "" ? tag(kids...) : tag(; align=al)(kids...)
+        al == "" ? h.td(kids...) : h.td(; align=al)(kids...)
     end
     header, body = t.rows[1], @view t.rows[2:end]
-    thead = h.thead(h.tr([cell(h.th, c, get(t.align, i, :l)) for (i, c) in enumerate(header)]...))
-    tbody = h.tbody([h.tr([cell(h.td, c, get(t.align, i, :l)) for (i, c) in enumerate(row)]...) for row in body]...)
-    # `class="sortable"` is the sorttable.js (kryogenix) convention: if the
-    # script is loaded in <head>, the table becomes click-to-sort. If not,
-    # the class is inert — no error, no behavior change.
-    h.table(; class="sortable")(thead, tbody)
+    thead = h.thead(h.tr([th_cell(c, get(t.align, i, :l), i) for (i, c) in enumerate(header)]...))
+    tbody = h.tbody([h.tr([td_cell(c, get(t.align, i, :l)) for (i, c) in enumerate(row)]...) for row in body]...)
+    h.table(; class="htmxo-sortable-table")(thead, tbody)
 end
 _md_to_node(l::Markdown.LaTeX) = "\$\$$(l.formula)\$\$"
 _md_to_node(x) = string(x)
