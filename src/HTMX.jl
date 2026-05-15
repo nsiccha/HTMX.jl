@@ -403,11 +403,43 @@ _md_to_node(t::Markdown.Table) = begin
         h.td(; align=(al == "" ? nothing : al), colspan)(kids...)
     end
     header, body = t.rows[1], @view t.rows[2:end]
+    n_cols = length(header)
+    # Master/detail auto-pairing. A body row that collapses to one cell of
+    # `colspan=n_cols` (the natural output of `| stuff |||` in an n-col table)
+    # is treated as a detail row and paired with the immediately preceding
+    # primary, emitting matching `tr#row-<key>-<n>` / `tr#detail-<key>-<n>`
+    # ids. HTMXObjects' `sortable_table_js()` already keeps such pairs glued
+    # across sorts. Without that script the ids are inert. Per-table key
+    # (hash of the parsed rows) keeps ids stable and collision-free across
+    # multiple tables on a page. Only the first detail after a primary is
+    # paired — `sortTable` looks up at most one companion per primary;
+    # multi-companion support is a JS-side follow-up.
+    body_collapsed = [collapse_empties(row) for row in body]
+    is_full_span(cells) = length(cells) == 1 && cells[1][2] == n_cols
+    row_ids = Vector{Union{String,Nothing}}(nothing, length(body_collapsed))
+    if n_cols > 1
+        key = string(hash(t.rows), base=16)
+        pair_n = 0
+        last_primary = 0
+        for (i, cells) in enumerate(body_collapsed)
+            if is_full_span(cells)
+                if last_primary != 0 && row_ids[last_primary] === nothing
+                    pair_n += 1
+                    row_ids[last_primary] = "row-$key-$pair_n"
+                    row_ids[i] = "detail-$key-$pair_n"
+                end
+            else
+                last_primary = i
+            end
+        end
+    end
+    tr_for(i, cells) = begin
+        children = [td_cell(c, get(t.align, idx, :l), span) for (c, span, idx) in cells]
+        row_ids[i] === nothing ? h.tr(children...) : h.tr(; id=row_ids[i])(children...)
+    end
     thead = h.thead(h.tr([th_cell(c, get(t.align, idx, :l), idx, span)
                           for (c, span, idx) in collapse_empties(header)]...))
-    tbody = h.tbody([h.tr([td_cell(c, get(t.align, idx, :l), span)
-                           for (c, span, idx) in collapse_empties(row)]...)
-                     for row in body]...)
+    tbody = h.tbody([tr_for(i, cells) for (i, cells) in enumerate(body_collapsed)]...)
     h.table(; class="htmxo-sortable-table")(thead, tbody)
 end
 _md_to_node(l::Markdown.LaTeX) = "\$\$$(l.formula)\$\$"
