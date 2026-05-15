@@ -376,7 +376,10 @@ _md_to_node(t::Markdown.Table) = begin
     header, body = t.rows[1], @view t.rows[2:end]
     thead = h.thead(h.tr([cell(h.th, c, get(t.align, i, :l)) for (i, c) in enumerate(header)]...))
     tbody = h.tbody([h.tr([cell(h.td, c, get(t.align, i, :l)) for (i, c) in enumerate(row)]...) for row in body]...)
-    h.table(thead, tbody)
+    # `class="sortable"` is the sorttable.js (kryogenix) convention: if the
+    # script is loaded in <head>, the table becomes click-to-sort. If not,
+    # the class is inert — no error, no behavior change.
+    h.table(; class="sortable")(thead, tbody)
 end
 _md_to_node(l::Markdown.LaTeX) = "\$\$$(l.formula)\$\$"
 _md_to_node(x) = string(x)
