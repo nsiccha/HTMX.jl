@@ -368,24 +368,46 @@ _md_to_node(t::Markdown.Table) = begin
     align_attr(a::Symbol) = a === :l ? "left" :
                             a === :c ? "center" :
                             a === :r ? "right" : ""
-    th_cell(content, a, i) = begin
-        kids = _md_to_node.(content)
-        # Wires into HTMXObjects' sortable_table_js() if loaded on the page;
-        # guarded so a click without that script is a silent no-op (no
-        # "sortTable is not defined" thrown).
-        onclick = "if(window.sortTable)sortTable($(i-1),this)"
-        al = align_attr(a)
-        al == "" ? h.th(; onclick, class="u-pointer")(kids...) :
-                   h.th(; align=al, onclick, class="u-pointer")(kids...)
+    # MultiMarkdown colspan convention: an empty cell extends the preceding
+    # non-empty cell rightward. `| A | B || D |` → B gets colspan=2 and the
+    # empty cell is dropped. Leading empties (no preceding non-empty) stay
+    # as plain empty cells.
+    function collapse_empties(row)
+        out = Tuple{Any, Int, Int}[]  # (content, colspan, first_col_idx)
+        for (i, c) in enumerate(row)
+            if isempty(c) && !isempty(out)
+                (content, span, idx) = out[end]
+                out[end] = (content, span + 1, idx)
+            else
+                push!(out, (c, 1, i))
+            end
+        end
+        out
     end
-    td_cell(content, a) = begin
+    th_cell(content, a, i, span) = begin
         kids = _md_to_node.(content)
         al = align_attr(a)
-        al == "" ? h.td(kids...) : h.td(; align=al)(kids...)
+        # Only single-column headers are click-to-sort. Spanning headers
+        # (group labels) opt out — HTMXObjects' CSS already sets
+        # `cursor: default` on `th[colspan]`. Guarded onclick so a click
+        # without `sortable_table_js()` loaded is a silent no-op.
+        onclick = span == 1 ? "if(window.sortTable)sortTable($(i-1),this)" : nothing
+        cls     = span == 1 ? "u-pointer" : nothing
+        colspan = span > 1 ? span : nothing
+        h.th(; align=(al == "" ? nothing : al), colspan, onclick, class=cls)(kids...)
+    end
+    td_cell(content, a, span) = begin
+        kids = _md_to_node.(content)
+        al = align_attr(a)
+        colspan = span > 1 ? span : nothing
+        h.td(; align=(al == "" ? nothing : al), colspan)(kids...)
     end
     header, body = t.rows[1], @view t.rows[2:end]
-    thead = h.thead(h.tr([th_cell(c, get(t.align, i, :l), i) for (i, c) in enumerate(header)]...))
-    tbody = h.tbody([h.tr([td_cell(c, get(t.align, i, :l)) for (i, c) in enumerate(row)]...) for row in body]...)
+    thead = h.thead(h.tr([th_cell(c, get(t.align, idx, :l), idx, span)
+                          for (c, span, idx) in collapse_empties(header)]...))
+    tbody = h.tbody([h.tr([td_cell(c, get(t.align, idx, :l), span)
+                           for (c, span, idx) in collapse_empties(row)]...)
+                     for row in body]...)
     h.table(; class="htmxo-sortable-table")(thead, tbody)
 end
 _md_to_node(l::Markdown.LaTeX) = "\$\$$(l.formula)\$\$"
