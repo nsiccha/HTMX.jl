@@ -361,7 +361,37 @@ _md_to_node(hdr::Markdown.Header{6}) = h.h6(_md_to_node.(hdr.text)...)
 _md_to_node(bq::Markdown.BlockQuote) = h.blockquote(_md_to_node.(bq.content)...)
 _md_to_node(list::Markdown.List) = begin
     tag = list.ordered == -1 ? h.ul : h.ol
-    tag([h.li(_md_to_node.(item)...) for item in list.items]...)
+    tag([_li_for(item) for item in list.items]...)
+end
+_li_for(item) = begin
+    info = _task_list_marker(item)
+    info === nothing && return h.li(_md_to_node.(item)...)
+    (checked, stripped_item) = info
+    h.li(h.input(; type="checkbox", disabled=true,
+                   checked = checked ? true : nothing),
+         " ",
+         _md_to_node.(stripped_item)...)
+end
+# GFM task-list detection: a list item whose first inline leaf starts with
+# `[ ]`, `[x]`, or `[X]` (optionally followed by a space) renders as a
+# disabled checkbox + the rest. Returns `(checked, stripped_item)` or
+# `nothing` when the item isn't a task entry.
+_task_list_marker(item) = begin
+    isempty(item) && return nothing
+    first_block = item[1]
+    first_block isa Markdown.Paragraph || return nothing
+    content = first_block.content
+    isempty(content) && return nothing
+    leaf = content[1]
+    leaf isa AbstractString || return nothing
+    m = match(r"^\[([ xX])\][ \t]*(.*)$"s, leaf)
+    m === nothing && return nothing
+    checked = m.captures[1] != " "
+    rest = String(m.captures[2])
+    new_content = isempty(rest) ? content[2:end] : vcat(Any[rest], content[2:end])
+    new_paragraph = Markdown.Paragraph(new_content)
+    new_item = vcat(Any[new_paragraph], item[2:end])
+    (checked, new_item)
 end
 _md_to_node(::Markdown.HorizontalRule) = h.hr()
 _md_to_node(t::Markdown.Table) = begin
