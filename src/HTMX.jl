@@ -366,16 +366,19 @@ end
 _li_for(item) = begin
     info = _task_list_marker(item)
     info === nothing && return h.li(_md_to_node.(item)...)
-    (checked, stripped_item) = info
+    (checked, first_inline, rest_blocks) = info
     h.li(h.input(; type="checkbox", disabled=true,
                    checked = checked ? true : nothing),
          " ",
-         _md_to_node.(stripped_item)...)
+         _md_to_node.(first_inline)...,
+         _md_to_node.(rest_blocks)...)
 end
 # GFM task-list detection: a list item whose first inline leaf starts with
 # `[ ]`, `[x]`, or `[X]` (optionally followed by a space) renders as a
-# disabled checkbox + the rest. Returns `(checked, stripped_item)` or
-# `nothing` when the item isn't a task entry.
+# disabled checkbox + the rest. Returns `(checked, first_inline_content,
+# rest_blocks)` so the caller can splice the first paragraph's inlines
+# directly beside the checkbox (no wrapping `<p>` that would force a line
+# break) and render any trailing blocks normally.
 _task_list_marker(item) = begin
     isempty(item) && return nothing
     first_block = item[1]
@@ -388,10 +391,8 @@ _task_list_marker(item) = begin
     m === nothing && return nothing
     checked = m.captures[1] != " "
     rest = String(m.captures[2])
-    new_content = isempty(rest) ? content[2:end] : vcat(Any[rest], content[2:end])
-    new_paragraph = Markdown.Paragraph(new_content)
-    new_item = vcat(Any[new_paragraph], item[2:end])
-    (checked, new_item)
+    first_inline = isempty(rest) ? content[2:end] : vcat(Any[rest], content[2:end])
+    (checked, first_inline, item[2:end])
 end
 _md_to_node(::Markdown.HorizontalRule) = h.hr()
 _md_to_node(t::Markdown.Table) = begin
