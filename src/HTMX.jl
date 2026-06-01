@@ -84,6 +84,18 @@ _absorb_hyperscript!(attrs, tag::HyperscriptString) =
 _absorb_hyperscript!(attrs, _) = true
 _filter_attrs(kwargs) = (k => (v === true ? "true" : string(v)) for (k, v) in kwargs if v !== nothing && v !== false)
 
+# True HTML boolean attributes: presence alone = true, so any value (incl.
+# "false") renders the attribute as set. For these, a string "false" must be
+# omitted — `selected="false"` would otherwise still select the option. This is
+# scoped to genuine boolean attributes ONLY; enumerated/ARIA attributes like
+# aria-expanded="false" are meaningful and must still render (see show loop).
+const _BOOLEAN_ATTRS = Set{Symbol}((
+    :allowfullscreen, :async, :autofocus, :autoplay, :checked, :controls,
+    :default, :defer, :disabled, :formnovalidate, :hidden, :inert, :ismap,
+    :itemscope, :loop, :multiple, :muted, :nomodule, :novalidate, :open,
+    :playsinline, :readonly, :required, :reversed, :selected,
+))
+
 """
     Node(tag, children...; attributes...)
 
@@ -118,6 +130,9 @@ Base.show(io, m::MIME"text/html", n::Node) = begin
     # Write opening tag ourselves to avoid Cobweb's "true" → bare attribute behavior
     print(io, '<', Cobweb.tag(cn))
     for (k, v) in attrs
+        # Omit string-valued "false" ONLY for true boolean attributes; for
+        # enumerated/ARIA attributes "false" is meaningful and must render.
+        v == "false" && k in _BOOLEAN_ATTRS && continue
         print(io, ' ', k, '=', '"', v, '"')
     end
     print(io, '>')
