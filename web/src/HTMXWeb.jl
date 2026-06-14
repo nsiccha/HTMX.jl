@@ -67,7 +67,7 @@ htmx_card(item::GalleryItem; spec) = h.article(
             ),
         ),
         h.h2("Package overview"),
-        h.p("HTML node builder wrapping Cobweb.jl with HTMX attribute conventions."),
+        h.p("Self-contained HTML node builder with HTMX attribute conventions."),
         h.h3("Features"),
         h.ul(
             h.li("h.tag() builder syntax with attribute merging"),

@@ -1,18 +1,20 @@
 """
     HTMX
 
-Lightweight HTML builder wrapping [Cobweb.jl](https://github.com/JuliaComputing/Cobweb.jl).
+Lightweight HTML builder. Owns a small immutable HTML [`Node`](@ref) primitive
+and renders it to HTML and Markdown.
 
 # Exports
 - [`h`](@ref) — tag-based HTML node builder (`h.div(...)`, `h.p("text")`)
-- [`Node`](@ref) — immutable wrapper around `Cobweb.Node`
+- [`Node`](@ref) — immutable HTML node (`tag` / `attrs` / `children`)
 - [`auto`](@ref) — convert arbitrary values to HTML response strings
 - [`@__str`](@ref) — string literal macro for [`HyperscriptString`](@ref)
+- [`md_to_node`](@ref) — Markdown string/AST → `h.*` nodes
 """
 module HTMX
 
-import Cobweb
 import Markdown
+using OrderedCollections: OrderedDict
 export auto, h, Node, @__str, md_to_node
 
 """
@@ -96,13 +98,44 @@ const _BOOLEAN_ATTRS = Set{Symbol}((
     :playsinline, :readonly, :required, :reversed, :selected,
 ))
 
+# ============================================================================
+# Node — the owned HTML node primitive
+# ----------------------------------------------------------------------------
+# Formerly a thin wrapper around `Cobweb.Node`; HTMX.jl now owns the ~40-line
+# primitive directly (one type, no wrapper layer). A `Node` is plain data —
+# `tag::Symbol`, `attrs::OrderedDict`, `children::Vector` — which makes both the
+# HTML/Markdown renderers below and any future `to_json` a straight structural
+# walk. Self-rendering "special" widgets are NOT Nodes: they are distinct types
+# that define `show(::MIME, x)` and splice in as children via `showable`/`show`.
+# ============================================================================
+
+# Void (self-closing) elements get no closing tag.
+const VOID_ELEMENTS = Set{Symbol}((
+    :area, :base, :br, :col, :command, :embed, :hr, :img, :input, :keygen,
+    :link, :meta, :param, :source, :track, :wbr,
+))
+
+# Attribute names: underscores become hyphens (`hx_get` → `hx-get`). The
+# hyperscript `_` kwarg therefore arrives as `-` and is remapped back to `_`
+# during HTML rendering (see `show`).
+_attr_symbol(k) = Symbol(replace(string(k), '_' => '-'))
+
+# HTML entity escaping for `&`, `"`, `'`, `<`, `>` (formerly `Cobweb.escape`).
+const _ESCAPE_PAIRS = ('&' => "&amp;", '"' => "&quot;", '\'' => "&#39;", '<' => "&lt;", '>' => "&gt;")
+function escape(x::AbstractString)
+    for pat in _ESCAPE_PAIRS
+        x = replace(x, pat)
+    end
+    x
+end
+
 """
     Node(tag, children...; attributes...)
 
-Immutable wrapper around `Cobweb.Node`. Keyword arguments become HTML attributes
-(underscores are converted to hyphens, e.g. `hx_get` → `hx-get`). Attributes set
-to `nothing` or `false` are omitted; `true` renders as `name="true"` (browsers
-treat the quoted value as truthy). Positional arguments become children.
+Immutable HTML node. Keyword arguments become HTML attributes (underscores are
+converted to hyphens, e.g. `hx_get` → `hx-get`). Attributes set to `nothing` or
+`false` are omitted; `true` renders as `name="true"` (browsers treat the quoted
+value as truthy). Positional arguments become children.
 
 Use call syntax to append children or merge attributes:
 
@@ -111,36 +144,66 @@ Use call syntax to append children or merge attributes:
 
 During HTML rendering, [`HyperscriptString`](@ref) children are moved to the `_`
 attribute (for [hyperscript](https://hyperscript.org/)).
+
+The fields are read with [`tag`](@ref), [`attrs`](@ref) and [`children`](@ref).
 """
 struct Node
-    parent::Cobweb.Node
-    Node(n::Cobweb.Node) = new(n)
-    Node(tag, args...; kwargs...) = new(Cobweb.h(tag, _flatten(args)...; _filter_attrs(kwargs)...))
+    tag::Symbol
+    attrs::OrderedDict{Symbol,Any}
+    children::Vector{Any}
+    # Canonical inner constructor: keys already hyphenated, types exact.
+    Node(tag::Symbol, attrs::OrderedDict{Symbol,Any}, children::Vector{Any}) = new(tag, attrs, children)
 end
-Base.parent(n::Node) = getfield(n, :parent)
-(n::Node)(args...; kwargs...) = Node(parent(n)(_flatten(args)...; _filter_attrs(kwargs)...))
-Base.show(io, m::MIME"text/html", n::Node) = begin
-    cn = parent(n)
-    cn = Cobweb.Node(Cobweb.tag(cn), copy(Cobweb.attrs(cn)), copy(Cobweb.children(cn)))
-    attrs = Cobweb.attrs(cn)
-    haskey(attrs, :(-)) && (attrs[:(_)] = pop!(attrs, :(-)))
-    filter!(Cobweb.children(cn)) do tag
-        _absorb_hyperscript!(attrs, tag)
-    end
-    # Write opening tag ourselves to avoid Cobweb's "true" → bare attribute behavior
-    print(io, '<', Cobweb.tag(cn))
-    for (k, v) in attrs
+
+# Field accessors (the public read surface; `n.attrs[k]` etc. also work).
+tag(n::Node)      = getfield(n, :tag)
+attrs(n::Node)    = getfield(n, :attrs)
+children(n::Node) = getfield(n, :children)
+
+# Normalizing 3-arg form: accepts any tag / dict / iterable of children and
+# coerces to the canonical field types (hyphenating attribute keys). Used when
+# rebuilding a node from already-extracted parts.
+Node(tag, attrs::AbstractDict, children) =
+    Node(Symbol(tag),
+         OrderedDict{Symbol,Any}(_attr_symbol(k) => v for (k, v) in attrs),
+         collect(Any, children))
+
+# Builder form behind `h.tag(...)`: filters/stringifies kwargs into attributes
+# and flattens positional children.
+Node(tag, args...; kwargs...) =
+    Node(Symbol(tag),
+         OrderedDict{Symbol,Any}(_attr_symbol(k) => v for (k, v) in _filter_attrs(kwargs)),
+         _flatten(args))
+
+# Call syntax appends children / merges attributes, returning a NEW node
+# (the original's vectors and dict are left untouched).
+(n::Node)(args...; kwargs...) =
+    Node(tag(n),
+         merge(attrs(n), OrderedDict{Symbol,Any}(_attr_symbol(k) => v for (k, v) in _filter_attrs(kwargs))),
+         vcat(children(n), _flatten(args)))
+
+function Base.show(io::IO, m::MIME"text/html", n::Node)
+    # Render off copies so the node itself is never mutated by hyperscript
+    # absorption.
+    a = copy(attrs(n))
+    kids = copy(children(n))
+    # `_` arrives hyphenated (see `_attr_symbol`); restore it for output.
+    haskey(a, :(-)) && (a[:(_)] = pop!(a, :(-)))
+    filter!(child -> _absorb_hyperscript!(a, child), kids)
+    print(io, '<', tag(n))
+    for (k, v) in a
         # Omit string-valued "false" ONLY for true boolean attributes; for
         # enumerated/ARIA attributes "false" is meaningful and must render.
         v == "false" && k in _BOOLEAN_ATTRS && continue
         print(io, ' ', k, '=', '"', v, '"')
     end
     print(io, '>')
-    for child in Cobweb.children(cn)
+    for child in kids
         showable("text/html", child) ? show(io, m, child) : print(io, child)
     end
-    Cobweb.tag(cn) in Cobweb.VOID_ELEMENTS || print(io, "</", Cobweb.tag(cn), '>')
+    tag(n) in VOID_ELEMENTS || print(io, "</", tag(n), '>')
 end
+
 # Table elements (tr, td, th, thead, tbody, tfoot) are silently stripped by
 # the browser's innerHTML parser when they lack proper parent context.
 # Wrapping in <template> lets HTMX swap them correctly.
@@ -150,7 +213,7 @@ _make_oob(content, id) = h.div(id=id, hx_swap_oob="true")(content)
 # Wrap an OOB swap in a <template> when the content is a table sub-element.
 # Dispatched on Node vs anything else; non-Node content always passes through.
 _template_if_table(content::Node, oob) =
-    Cobweb.tag(parent(content)) in _table_tags ? h.template(oob) : oob
+    tag(content) in _table_tags ? h.template(oob) : oob
 _template_if_table(_, oob) = oob
 function auto((content, id)::Pair; wrap)
     oob = _template_if_table(content, _make_oob(content, id))
@@ -177,20 +240,16 @@ Base.getproperty(::typeof(h), tag::Symbol) = (args...; kwargs...)->h(tag, args..
 
 # --- Markdown rendering ---
 
-_unwrap(n::Node) = parent(n)
-_unwrap(n) = n
-
 # Collect all text content from a node tree (for inline rendering)
-_collect_text(n) = _collect_text_node(_unwrap(n))
-_collect_text_node(n) = string(n)
-function _collect_text_node(n::Cobweb.Node)
-    tag = string(Cobweb.tag(n))
-    children_text = join(_collect_text.(Cobweb.children(n)))
-    tag == "strong" || tag == "b" ? "**$(children_text)**" :
-    tag == "em" || tag == "i" ? "*$(children_text)*" :
-    tag == "code" ? "`$(children_text)`" :
-    tag == "a" ? "[$(children_text)]($(get(Cobweb.attrs(n), :href, "")))" :
-    tag == "br" ? "\n" :
+_collect_text(n) = string(n)
+function _collect_text(n::Node)
+    t = string(tag(n))
+    children_text = join(_collect_text.(children(n)))
+    t == "strong" || t == "b" ? "**$(children_text)**" :
+    t == "em" || t == "i" ? "*$(children_text)*" :
+    t == "code" ? "`$(children_text)`" :
+    t == "a" ? "[$(children_text)]($(get(attrs(n), :href, "")))" :
+    t == "br" ? "\n" :
     children_text
 end
 
@@ -206,27 +265,22 @@ Base.show(io::IO, ::MIME"text/markdown", val::AbstractString) = print(io, val)
 Base.show(io::IO, m::MIME"text/markdown", val::AbstractArray) = foreach(v -> show(io, m, v), val)
 
 # Node: dispatch by tag via _md(io, m, node, ::Val{tag})
-Base.show(io::IO, m::MIME"text/markdown", n::Node) = _md_dispatch(io, m, _unwrap(n))
-_md_dispatch(io, m, node) = show(io, m, node)
-_md_dispatch(io, m, node::Cobweb.Node) = _md(io, m, node, Val(Cobweb.tag(node)))
+Base.show(io::IO, m::MIME"text/markdown", n::Node) = _md(io, m, n, Val(tag(n)))
 
 # Default: print collected text if non-empty (unknown tags fall here)
-function _md(io, m, node::Cobweb.Node, ::Val)
+function _md(io, m, node::Node, ::Val)
     text = _collect_text(node)
     isempty(strip(text)) || println(io, text)
 end
 
-_wrap_for_show(c::Cobweb.Node) = Node(c)
-_wrap_for_show(c) = c
-
 # Recurse into children as if the node were transparent
-_md_recurse(io, m, node) = for c in Cobweb.children(node)
-    show(io, m, _wrap_for_show(_unwrap(c)))
+_md_recurse(io, m, node) = for c in children(node)
+    show(io, m, c)
 end
 
 # Headings h1..h6
 for lvl in 1:6
-    @eval _md(io, m, node::Cobweb.Node, ::Val{$(QuoteNode(Symbol("h$lvl")))}) =
+    @eval _md(io, m, node::Node, ::Val{$(QuoteNode(Symbol("h$lvl")))}) =
         println(io, $("#"^lvl), " ", _collect_text(node))
 end
 
@@ -234,38 +288,38 @@ end
 for t in (:div, :main, :body, :html, :head,
           :span, :ul, :ol, :thead, :tbody, :tr, :details, :summary,
           :form, :label, :nav, :footer, :dl)
-    @eval _md(io, m, node::Cobweb.Node, ::Val{$(QuoteNode(t))}) = _md_recurse(io, m, node)
+    @eval _md(io, m, node::Node, ::Val{$(QuoteNode(t))}) = _md_recurse(io, m, node)
 end
 
 # Semantic blocks: emit a leading `---` divider so an agent reader can see
 # where each block starts. Only leading (not trailing), so adjacent blocks
 # produce a single divider between them rather than doubled.
 for t in (:article, :section)
-    @eval _md(io, m, node::Cobweb.Node, ::Val{$(QuoteNode(t))}) =
+    @eval _md(io, m, node::Node, ::Val{$(QuoteNode(t))}) =
         (println(io); println(io, "---"); println(io); _md_recurse(io, m, node); println(io))
 end
 
 # <header> is the label/title of its surrounding block — render as a level-3
 # heading so the structure is legible to an agent reader.
-_md(io, m, node::Cobweb.Node, ::Val{:header}) = println(io, "### ", _collect_text(node))
+_md(io, m, node::Node, ::Val{:header}) = println(io, "### ", _collect_text(node))
 
 # Non-content tags: skip
 for t in (:script, :style, :meta, :link)
-    @eval _md(io, m, node::Cobweb.Node, ::Val{$(QuoteNode(t))}) = nothing
+    @eval _md(io, m, node::Node, ::Val{$(QuoteNode(t))}) = nothing
 end
 
 # Block leaves
-_md(io, m, node::Cobweb.Node, ::Val{:p})     = (println(io, _collect_text(node)); println(io))
-_md(io, m, node::Cobweb.Node, ::Val{:li})    = println(io, "- ", _collect_text(node))
-_md(io, m, node::Cobweb.Node, ::Val{:pre})   = (println(io, "```"); println(io, _collect_text(node)); println(io, "```"))
-_md(io, m, node::Cobweb.Node, ::Val{:hr})    = println(io, "---")
-_md(io, m, node::Cobweb.Node, ::Val{:table}) = _table_to_markdown(io, node)
+_md(io, m, node::Node, ::Val{:p})     = (println(io, _collect_text(node)); println(io))
+_md(io, m, node::Node, ::Val{:li})    = println(io, "- ", _collect_text(node))
+_md(io, m, node::Node, ::Val{:pre})   = (println(io, "```"); println(io, _collect_text(node)); println(io, "```"))
+_md(io, m, node::Node, ::Val{:hr})    = println(io, "---")
+_md(io, m, node::Node, ::Val{:table}) = _table_to_markdown(io, node)
 
 # <title> → top-level heading (so a full page with <head><title>X</title></head> renders as "# X")
-_md(io, m, node::Cobweb.Node, ::Val{:title}) = println(io, "# ", _collect_text(node))
+_md(io, m, node::Node, ::Val{:title}) = println(io, "# ", _collect_text(node))
 
 # <blockquote> → "> "-prefixed lines
-function _md(io, m, node::Cobweb.Node, ::Val{:blockquote})
+function _md(io, m, node::Node, ::Val{:blockquote})
     buf = IOBuffer()
     _md_recurse(buf, m, node)
     inner = rstrip(String(take!(buf)), '\n')
@@ -277,22 +331,21 @@ function _md(io, m, node::Cobweb.Node, ::Val{:blockquote})
 end
 
 # <img> → ![alt](src)
-function _md(io, m, node::Cobweb.Node, ::Val{:img})
-    attrs = Cobweb.attrs(node)
-    src = get(attrs, :src, "")
+function _md(io, m, node::Node, ::Val{:img})
+    a = attrs(node)
+    src = get(a, :src, "")
     isempty(src) && return
-    println(io, "![", get(attrs, :alt, ""), "](", src, ")")
+    println(io, "![", get(a, :alt, ""), "](", src, ")")
 end
 
-# Per-child folds for figure/table parsing, dispatched on Cobweb.Node vs
-# anything else (text nodes, strings, etc.). The non-Node fallback is the
-# "skip" branch that the previous `_is_cobweb_node(...) || continue` guards
-# encoded; control flow now lives at the method boundary.
+# Per-child folds for figure/table parsing, dispatched on Node vs anything
+# else (text nodes, strings, etc.). The non-Node fallback is the "skip" branch;
+# control flow lives at the method boundary.
 _figure_visit(::Any, src, alt, caption) = (src, alt, caption)
-_figure_visit(cn::Cobweb.Node, src, alt, caption) = begin
-    t = Cobweb.tag(cn)
+_figure_visit(cn::Node, src, alt, caption) = begin
+    t = tag(cn)
     if t === :img && isempty(src)
-        a = Cobweb.attrs(cn)
+        a = attrs(cn)
         return (get(a, :src, ""), get(a, :alt, ""), caption)
     elseif t === :figcaption
         return (src, alt, _collect_text(cn))
@@ -301,10 +354,10 @@ _figure_visit(cn::Cobweb.Node, src, alt, caption) = begin
 end
 
 # <figure><img><figcaption> → ![caption](src); fall back to recursion if no <img>
-function _md(io, m, node::Cobweb.Node, ::Val{:figure})
+function _md(io, m, node::Node, ::Val{:figure})
     src = ""; alt = ""; caption = ""
-    for c in Cobweb.children(node)
-        src, alt, caption = _figure_visit(_unwrap(c), src, alt, caption)
+    for c in children(node)
+        src, alt, caption = _figure_visit(c, src, alt, caption)
     end
     isempty(src) && return _md_recurse(io, m, node)
     label = isempty(caption) ? alt : caption
@@ -312,26 +365,25 @@ function _md(io, m, node::Cobweb.Node, ::Val{:figure})
 end
 
 _collect_table_rows!(rows, ::Any) = nothing
-_collect_table_rows!(rows, section::Cobweb.Node) = for row in Cobweb.children(section)
-    _push_tr!(rows, _unwrap(row))
+_collect_table_rows!(rows, section::Node) = for row in children(section)
+    _push_tr!(rows, row)
 end
 _push_tr!(rows, ::Any) = nothing
-_push_tr!(rows, r::Cobweb.Node) = string(Cobweb.tag(r)) == "tr" && push!(rows, r)
+_push_tr!(rows, r::Node) = string(tag(r)) == "tr" && push!(rows, r)
 
 _push_cell_text!(cells, ::Any) = nothing
-_push_cell_text!(cells, c::Cobweb.Node) = push!(cells, _collect_text(c))
+_push_cell_text!(cells, c::Node) = push!(cells, _collect_text(c))
 
-function _table_to_markdown(io::IO, table)
-    table = _unwrap(table)
-    rows = Cobweb.Node[]
-    for section in Cobweb.children(table)
-        _collect_table_rows!(rows, _unwrap(section))
+function _table_to_markdown(io::IO, table::Node)
+    rows = Node[]
+    for section in children(table)
+        _collect_table_rows!(rows, section)
     end
     isempty(rows) && return
     for (i, row) in enumerate(rows)
         cells = String[]
-        for c in Cobweb.children(row)
-            _push_cell_text!(cells, _unwrap(c))
+        for c in children(row)
+            _push_cell_text!(cells, c)
         end
         println(io, "| ", join(cells, " | "), " |")
         if i == 1
@@ -364,7 +416,7 @@ _md_to_node(md::Markdown.MD) = h.div(_md_to_node.(md.content)...)
 _md_to_node(p::Markdown.Paragraph) = h.p(_md_to_node.(p.content)...)
 _md_to_node(b::Markdown.Bold) = h.strong(_md_to_node.(b.text)...)
 _md_to_node(i::Markdown.Italic) = h.em(_md_to_node.(i.text)...)
-_md_to_node(c::Markdown.Code) = c.language == "" ? h.code(Cobweb.escape(c.code)) : h.pre(h.code(Cobweb.escape(c.code)))
+_md_to_node(c::Markdown.Code) = c.language == "" ? h.code(escape(c.code)) : h.pre(h.code(escape(c.code)))
 _md_to_node(l::Markdown.Link) = h.a(href=l.url)(_md_to_node.(l.text)...)
 _md_to_node(hdr::Markdown.Header{1}) = h.h1(_md_to_node.(hdr.text)...)
 _md_to_node(hdr::Markdown.Header{2}) = h.h2(_md_to_node.(hdr.text)...)

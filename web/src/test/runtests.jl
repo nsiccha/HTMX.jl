@@ -182,11 +182,16 @@ end
 end
 
 # ================================================================
-# Node wrapping
+# Node primitive (owned by HTMX.jl — no Cobweb wrapper)
 # ================================================================
 
-@testset "Node wraps Cobweb.Node" begin
-    n = h.div("test")
+@testset "Node is the owned primitive" begin
+    n = h.div(class="x")("test")
     @test n isa HTMX.Node
-    @test parent(n) isa HTMX.Cobweb.Node
+    @test HTMX.tag(n) === :div
+    @test HTMX.attrs(n) isa AbstractDict
+    @test HTMX.attrs(n)[:class] == "x"
+    @test HTMX.children(n) == ["test"]
+    # Call syntax returns a new node; the original is unchanged.
+    @test HTMX.children(h.div()) == []
 end
