@@ -373,6 +373,7 @@ function _md(io, m, node::Node, ::Val{:figure})
     if !isnothing(caption_node)
         println(io)
         _md_recurse(io, m, caption_node)
+        println(io)
     end
     println(io, ":::")
     print(io, "\n")
