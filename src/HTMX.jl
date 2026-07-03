@@ -330,7 +330,8 @@ function _md(io, m, node::Node, ::Val{:pre})
         end
     end
     println(io, "```", lang)
-    println(io, _collect_text(node))
+    _md_recurse(io, m, node)
+    println(io)
     println(io, "```")
 end
 _md(io, m, node::Node, ::Val{:hr})    = println(io, "---")
