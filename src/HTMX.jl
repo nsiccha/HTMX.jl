@@ -286,9 +286,17 @@ end
 
 # Containers: recurse transparently
 for t in (:div, :main, :body, :html, :head,
-          :span, :ul, :ol, :thead, :tbody, :tr, :details, :summary,
+          :span, :ul, :ol, :thead, :tbody, :tr, :summary,
           :form, :label, :nav, :footer, :dl)
     @eval _md(io, m, node::Node, ::Val{$(QuoteNode(t))}) = _md_recurse(io, m, node)
+end
+
+# <details>: skip the <summary> toggle label, recurse the content
+function _md(io, m, node::Node, ::Val{:details})
+    for c in children(node)
+        c isa Node && tag(c) === :summary && continue
+        show(io, m, c)
+    end
 end
 
 # Semantic blocks: emit a leading `---` divider so an agent reader can see
@@ -304,7 +312,7 @@ end
 _md(io, m, node::Node, ::Val{:header}) = println(io, "### ", _collect_text(node))
 
 # Non-content tags: skip
-for t in (:script, :style, :meta, :link)
+for t in (:script, :style, :meta, :link, :button)
     @eval _md(io, m, node::Node, ::Val{$(QuoteNode(t))}) = nothing
 end
 
