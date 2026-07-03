@@ -338,30 +338,36 @@ function _md(io, m, node::Node, ::Val{:img})
     println(io, "![", get(a, :alt, ""), "](", src, ")")
 end
 
-# Per-child folds for figure/table parsing, dispatched on Node vs anything
-# else (text nodes, strings, etc.). The non-Node fallback is the "skip" branch;
-# control flow lives at the method boundary.
-_figure_visit(::Any, src, alt, caption) = (src, alt, caption)
-_figure_visit(cn::Node, src, alt, caption) = begin
-    t = tag(cn)
-    if t === :img && isempty(src)
-        a = attrs(cn)
-        return (get(a, :src, ""), get(a, :alt, ""), caption)
-    elseif t === :figcaption
-        return (src, alt, _collect_text(cn))
-    end
-    (src, alt, caption)
-end
-
-# <figure><img><figcaption> → ![caption](src); fall back to recursion if no <img>
+# <figure> → Quarto fenced div.  Blank lines before/after guarantee
+# block-level parsing by Pandoc.  Children are recursed with blank-line
+# separation (required for Quarto subfigures).  <figcaption> is moved
+# to the final paragraph — Quarto treats the last block inside a
+# `::: {#fig-…}` div as the displayed caption.  Nested <figure> nodes
+# recurse into their own `:::` blocks (Quarto subfigures).
 function _md(io, m, node::Node, ::Val{:figure})
-    src = ""; alt = ""; caption = ""
+    a = attrs(node)
+    id = get(a, :id, nothing)
+    caption_node = nothing
+    content = Any[]
     for c in children(node)
-        src, alt, caption = _figure_visit(c, src, alt, caption)
+        if c isa Node && tag(c) === :figcaption
+            caption_node = c
+        else
+            push!(content, c)
+        end
     end
-    isempty(src) && return _md_recurse(io, m, node)
-    label = isempty(caption) ? alt : caption
-    println(io, "![", label, "](", src, ")")
+    print(io, "\n\n")
+    println(io, isnothing(id) ? ":::" : "::: {#$id}")
+    for (i, c) in enumerate(content)
+        i > 1 && println(io)
+        show(io, m, c)
+    end
+    if !isnothing(caption_node)
+        println(io)
+        _md_recurse(io, m, caption_node)
+    end
+    println(io, ":::")
+    print(io, "\n")
 end
 
 _collect_table_rows!(rows, ::Any) = nothing
