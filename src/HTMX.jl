@@ -321,8 +321,10 @@ _md(io, m, node::Node, ::Val{:p})     = (println(io, _collect_text(node)); print
 _md(io, m, node::Node, ::Val{:li})    = println(io, "- ", _collect_text(node))
 function _md(io, m, node::Node, ::Val{:pre})
     lang = ""
+    code_node = nothing
     for c in children(node)
         if c isa Node && tag(c) === :code
+            code_node = c
             cls = get(attrs(c), :class, "")
             lm = match(r"language-(\S+)", string(cls))
             isnothing(lm) || (lang = lm[1])
@@ -330,7 +332,7 @@ function _md(io, m, node::Node, ::Val{:pre})
         end
     end
     println(io, "```", lang)
-    _md_recurse(io, m, node)
+    _md_recurse(io, m, isnothing(code_node) ? node : code_node)
     println(io)
     println(io, "```")
 end
