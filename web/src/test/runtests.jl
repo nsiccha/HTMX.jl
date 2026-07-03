@@ -195,3 +195,59 @@ end
     # Call syntax returns a new node; the original is unchanged.
     @test HTMX.children(h.div()) == []
 end
+
+# ================================================================
+# Markdown rendering (Node -> text/markdown via _md dispatch)
+# ================================================================
+
+to_md(node) = repr("text/markdown", node)
+
+@testset "markdown - inline formatting" begin
+    @test to_md(h.strong("bold")) == "**bold**"
+    @test to_md(h.b("bold")) == "**bold**"
+    @test to_md(h.em("it")) == "*it*"
+    @test to_md(h.i("it")) == "*it*"
+    @test to_md(h.code("x = 1")) == "`x = 1`"
+    @test to_md(h.a(href="http://ex.com")("link")) == "[link](http://ex.com)"
+end
+
+@testset "markdown - paragraph keeps inline formatting" begin
+    p = h.p("hello ", h.strong("world"), " and ", h.code("y"))
+    @test to_md(p) == "hello **world** and `y`\n\n"
+end
+
+@testset "markdown - br renders a newline" begin
+    @test to_md(h.p("a", h.br(), "b")) == "a\nb\n\n"
+end
+
+@testset "markdown - heading keeps inline formatting" begin
+    @test to_md(h.h1("Top")) == "# Top\n"
+    @test to_md(h.h2("Title ", h.em("x"))) == "## Title *x*\n"
+end
+
+@testset "markdown - list item keeps inline formatting" begin
+    @test to_md(h.li("item ", h.strong("bold"))) == "- item **bold**\n"
+end
+
+@testset "markdown - pre emits fenced block without stray backticks" begin
+    out = to_md(h.pre(h.code(class="language-julia", "x = 1\ny = 2")))
+    @test out == "```julia\nx = 1\ny = 2\n```\n"
+    # The inline <code> handler must NOT fire inside <pre>.
+    @test !occursin("`x = 1`", out)
+end
+
+@testset "markdown - table cells keep inline formatting" begin
+    out = to_md(md_to_node("| **A** | B |\n|---|---|\n| `c` | *d* |"))
+    @test occursin("| **A** | B |", out)
+    @test occursin("| `c` | *d* |", out)
+end
+
+@testset "markdown - md_to_node round-trips inline formatting" begin
+    rt = "**bold** and `code` and [link](http://x)"
+    @test strip(to_md(md_to_node(rt))) == rt
+end
+
+@testset "markdown - header and title" begin
+    @test to_md(h.header("Section")) == "### Section\n"
+    @test to_md(h.title("Page ", h.code("Title"))) == "# Page `Title`\n"
+end

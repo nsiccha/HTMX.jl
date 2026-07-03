@@ -240,19 +240,6 @@ Base.getproperty(::typeof(h), tag::Symbol) = (args...; kwargs...)->h(tag, args..
 
 # --- Markdown rendering ---
 
-# Collect all text content from a node tree (for inline rendering)
-_collect_text(n) = string(n)
-function _collect_text(n::Node)
-    t = string(tag(n))
-    children_text = join(_collect_text.(children(n)))
-    t == "strong" || t == "b" ? "**$(children_text)**" :
-    t == "em" || t == "i" ? "*$(children_text)*" :
-    t == "code" ? "`$(children_text)`" :
-    t == "a" ? "[$(children_text)]($(get(attrs(n), :href, "")))" :
-    t == "br" ? "\n" :
-    children_text
-end
-
 const _md_mime = MIME"text/markdown"()
 
 # Fallback: any non-Node value renders as its string representation
@@ -267,21 +254,36 @@ Base.show(io::IO, m::MIME"text/markdown", val::AbstractArray) = foreach(v -> sho
 # Node: dispatch by tag via _md(io, m, node, ::Val{tag})
 Base.show(io::IO, m::MIME"text/markdown", n::Node) = _md(io, m, n, Val(tag(n)))
 
-# Default: print collected text if non-empty (unknown tags fall here)
-function _md(io, m, node::Node, ::Val)
-    text = _collect_text(node)
-    isempty(strip(text)) || println(io, text)
-end
+# Default: recurse transparently (unknown tags fall here)
+_md(io, m, node::Node, ::Val) = _md_recurse(io, m, node)
 
 # Recurse into children as if the node were transparent
 _md_recurse(io, m, node) = for c in children(node)
     show(io, m, c)
 end
 
+# Inline formatting — written straight to io (no intermediate strings). These
+# fire for inline elements everywhere EXCEPT inside <pre>: its handler recurses
+# into the <code> child's own children, so _md is never dispatched on <code>
+# there and no backticks leak into the fenced block.
+for t in (:strong, :b)
+    @eval _md(io, m, node::Node, ::Val{$(QuoteNode(t))}) =
+        (print(io, "**"); _md_recurse(io, m, node); print(io, "**"))
+end
+for t in (:em, :i)
+    @eval _md(io, m, node::Node, ::Val{$(QuoteNode(t))}) =
+        (print(io, "*"); _md_recurse(io, m, node); print(io, "*"))
+end
+_md(io, m, node::Node, ::Val{:code}) =
+    (print(io, "`"); _md_recurse(io, m, node); print(io, "`"))
+_md(io, m, node::Node, ::Val{:a}) =
+    (print(io, "["); _md_recurse(io, m, node); print(io, "](", get(attrs(node), :href, ""), ")"))
+_md(io, m, node::Node, ::Val{:br}) = print(io, "\n")
+
 # Headings h1..h6
 for lvl in 1:6
     @eval _md(io, m, node::Node, ::Val{$(QuoteNode(Symbol("h$lvl")))}) =
-        println(io, $("#"^lvl), " ", _collect_text(node))
+        (print(io, $("#"^lvl * " ")); _md_recurse(io, m, node); println(io))
 end
 
 # Containers: recurse transparently
@@ -309,7 +311,7 @@ end
 
 # <header> is the label/title of its surrounding block — render as a level-3
 # heading so the structure is legible to an agent reader.
-_md(io, m, node::Node, ::Val{:header}) = println(io, "### ", _collect_text(node))
+_md(io, m, node::Node, ::Val{:header}) = (print(io, "### "); _md_recurse(io, m, node); println(io))
 
 # Non-content tags: skip
 for t in (:script, :style, :meta, :link, :button)
@@ -317,8 +319,8 @@ for t in (:script, :style, :meta, :link, :button)
 end
 
 # Block leaves
-_md(io, m, node::Node, ::Val{:p})     = (println(io, _collect_text(node)); println(io))
-_md(io, m, node::Node, ::Val{:li})    = println(io, "- ", _collect_text(node))
+_md(io, m, node::Node, ::Val{:p})     = (_md_recurse(io, m, node); println(io); println(io))
+_md(io, m, node::Node, ::Val{:li})    = (print(io, "- "); _md_recurse(io, m, node); println(io))
 function _md(io, m, node::Node, ::Val{:pre})
     lang = ""
     code_node = nothing
@@ -340,7 +342,7 @@ _md(io, m, node::Node, ::Val{:hr})    = println(io, "---")
 _md(io, m, node::Node, ::Val{:table}) = _table_to_markdown(io, node)
 
 # <title> → top-level heading (so a full page with <head><title>X</title></head> renders as "# X")
-_md(io, m, node::Node, ::Val{:title}) = println(io, "# ", _collect_text(node))
+_md(io, m, node::Node, ::Val{:title}) = (print(io, "# "); _md_recurse(io, m, node); println(io))
 
 # <blockquote> → "> "-prefixed lines
 function _md(io, m, node::Node, ::Val{:blockquote})
@@ -403,7 +405,11 @@ _push_tr!(rows, ::Any) = nothing
 _push_tr!(rows, r::Node) = string(tag(r)) == "tr" && push!(rows, r)
 
 _push_cell_text!(cells, ::Any) = nothing
-_push_cell_text!(cells, c::Node) = push!(cells, _collect_text(c))
+function _push_cell_text!(cells, c::Node)
+    buf = IOBuffer()
+    _md_recurse(buf, _md_mime, c)
+    push!(cells, strip(String(take!(buf))))
+end
 
 function _table_to_markdown(io::IO, table::Node)
     rows = Node[]
