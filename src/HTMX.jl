@@ -319,7 +319,20 @@ end
 # Block leaves
 _md(io, m, node::Node, ::Val{:p})     = (println(io, _collect_text(node)); println(io))
 _md(io, m, node::Node, ::Val{:li})    = println(io, "- ", _collect_text(node))
-_md(io, m, node::Node, ::Val{:pre})   = (println(io, "```"); println(io, _collect_text(node)); println(io, "```"))
+function _md(io, m, node::Node, ::Val{:pre})
+    lang = ""
+    for c in children(node)
+        if c isa Node && tag(c) === :code
+            cls = get(attrs(c), :class, "")
+            lm = match(r"language-(\S+)", string(cls))
+            isnothing(lm) || (lang = lm[1])
+            break
+        end
+    end
+    println(io, "```", lang)
+    println(io, _collect_text(node))
+    println(io, "```")
+end
 _md(io, m, node::Node, ::Val{:hr})    = println(io, "---")
 _md(io, m, node::Node, ::Val{:table}) = _table_to_markdown(io, node)
 
