@@ -543,15 +543,26 @@ end
 # --- element emit helpers ---
 
 # Is this child inline (groups into an anonymous <text> run inside a view) or
-# standalone (emits its own top-level element)? Strings/bare values are inline;
-# Nodes default to standalone, with the genuinely-inline tags marked below.
+# standalone (emits its own top-level element)? Strings/bare values are inline.
 _hxml_inline(::HyperscriptString) = false
 _hxml_inline(::AbstractString) = true
 _hxml_inline(n::Node) = _hxml_tag_inline(Val(tag(n)))
 _hxml_inline(_) = true
-_hxml_tag_inline(::Val) = false
-for t in (:span, :small, :strong, :b, :em, :i, :code, :a, :sub, :sup, :mark)
-    @eval _hxml_tag_inline(::Val{$(QuoteNode(t))}) = true
+# Unknown tags default to INLINE, so an unrecognised inline text tag (time, abbr,
+# cite, q, …) groups into a <text> run instead of leaking bare text into a <view>
+# (which Hyperview rejects). Every tag that emits its own <view> or block-level
+# <text> is marked standalone (false) below; the remaining known inline text tags
+# (span/small/strong/em/code/a/…) just ride the default.
+_hxml_tag_inline(::Val) = true
+for t in (:div, :main, :body, :section, :article, :nav, :footer, :header, :aside,
+          :details, :figure, :blockquote, :html, :head,
+          :ul, :ol, :li, :dl, :dt, :dd,
+          :table, :thead, :tbody, :tfoot, :tr, :th, :td,
+          :form, :fieldset, :select, :textarea, :input, :button, :option,
+          :img, :hr, :p, :pre, :label, :figcaption, :summary, :title,
+          :h1, :h2, :h3, :h4, :h5, :h6,
+          :script, :style, :meta, :link, :datalist)
+    @eval _hxml_tag_inline(::Val{$(QuoteNode(t))}) = false
 end
 
 # Emit children into a VIEW context: consecutive inline children are grouped
@@ -823,6 +834,29 @@ function _hxml(io, m, node::Node, ::Val{:option})
         extra=(("value", get(attrs(node), :value, nothing)),))
     _hxml_view_children(io, m, node)
     print(io, "</option>")
+end
+
+# === Section C: graceful degradation ===
+
+# Non-content / browser-only tags → dropped (no HXML equivalent; matches the
+# markdown serializer). <datalist> has no Hyperview counterpart — the paired
+# <input> still renders as a plain field.
+for t in (:script, :style, :meta, :link, :datalist)
+    @eval _hxml(io, m, node::Node, ::Val{$(QuoteNode(t))}) = nothing
+end
+
+# Description lists: <dl>/<dd> → <view>, <dt> → a <text> term.
+for t in (:dl, :dd)
+    @eval _hxml(io, m, node::Node, ::Val{$(QuoteNode(t))}) = _hxml_view(io, m, node, $(string(t)))
+end
+_hxml(io, m, node::Node, ::Val{:dt}) = _hxml_text(io, m, node, "dt")
+
+# Embedded external content (iframe/embed/object — e.g. a PDF preview) →
+# <web-view url=…>, Hyperview's in-app browser. src/data → url.
+for t in (:iframe, :embed, :object)
+    @eval _hxml(io, m, node::Node, ::Val{$(QuoteNode(t))}) =
+        _hxml_open(io, node, "web-view"; styleid="web-view", selfclose=true,
+            extra=(("url", get(attrs(node), :src, get(attrs(node), :data, nothing))),))
 end
 
 # --- Markdown AST → h.* Node conversion ---
