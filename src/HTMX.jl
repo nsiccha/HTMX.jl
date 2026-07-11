@@ -482,6 +482,250 @@ function _table_to_markdown(io::IO, table::Node)
     println(io)
 end
 
+# --- Hyperview HXML rendering ---
+#
+# A THIRD Node serializer beside HTML and Markdown, for Hyperview
+# (https://hyperview.org) — "HTMX for native mobile": the server emits HXML (a
+# strict XML dialect) that a React-Native client renders as native views. Like
+# the HTML/Markdown serializers, this emits a BODY FRAGMENT (the
+# <view>/<text>/<form>/<behavior> tree); the enclosing
+# <doc><screen><styles><body> chrome and content-negotiation are added by the
+# web framework on top (HTMXObjects), exactly as its `_page_wrapper` wraps the
+# HTML fragment.
+#
+# The impedance mismatch this handles: HXML strictly separates a TEXT context
+# (inside <text>, where only text runs nest) from a VIEW context (inside <view>,
+# where bare text is INVALID and must be wrapped in <text>). Block tags render
+# to <view> and group their inline children into <text> runs (see
+# `_hxml_view_children`); inline/text tags render to a <text> whose children
+# recurse transparently as nested runs.
+#
+# Styling: Hyperview has no CSS — elements reference styles by id
+# (style="foo"), defined in the chrome's <styles> block. A style id is derived
+# from the semantic tag (h.small → style="small") plus any `class` tokens
+# (h.div(class="row") → style="row"); the chrome (HTMXObjects) must define
+# matching ids. The tag-derived vocabulary: div/section/… view ids, the text
+# ids (p small span strong em code pre h1..h6 li a label header … th td), plus
+# whatever `class` tokens the app uses.
+
+const _hxml_mime = MIME"application/vnd.hyperview+xml"()
+
+# XML escaping for element text and double-quoted attribute values. Note the
+# apostrophe → &apos; (XML), distinct from the HTML serializer's &#39;.
+const _XML_ESCAPE_PAIRS = ('&' => "&amp;", '<' => "&lt;", '>' => "&gt;", '"' => "&quot;", '\'' => "&apos;")
+function _xml_escape(x::AbstractString)
+    for pat in _XML_ESCAPE_PAIRS
+        x = replace(x, pat)
+    end
+    x
+end
+
+# Entry points (mirror the text/markdown block above).
+# Fallback: any non-Node value renders as its XML-escaped string form.
+Base.show(io::IO, ::MIME"application/vnd.hyperview+xml", val) = print(io, _xml_escape(string(val)))
+Base.show(io::IO, ::MIME"application/vnd.hyperview+xml", val::AbstractString) = print(io, _xml_escape(val))
+# Hyperscript is browser-side JS — meaningless to a native client, so drop it.
+Base.show(io::IO, ::MIME"application/vnd.hyperview+xml", ::HyperscriptString) = nothing
+# Arrays: render each element.
+Base.show(io::IO, m::MIME"application/vnd.hyperview+xml", val::AbstractArray) = foreach(v -> show(io, m, v), val)
+# Node: dispatch by tag via _hxml(io, m, node, ::Val{tag}).
+Base.show(io::IO, m::MIME"application/vnd.hyperview+xml", n::Node) = _hxml(io, m, n, Val(tag(n)))
+
+# Default: recurse transparently (unknown tags fall here, like _md's default).
+_hxml(io, m, node::Node, ::Val) = _hxml_recurse(io, m, node)
+
+# Recurse into children as if the node were transparent (text-context: children
+# nest directly). HyperscriptString children are skipped (browser-only JS).
+_hxml_recurse(io, m, node) = for c in children(node)
+    c isa HyperscriptString || show(io, m, c)
+end
+
+# --- element emit helpers ---
+
+# Is this child inline (groups into an anonymous <text> run inside a view) or
+# standalone (emits its own top-level element)? Strings/bare values are inline;
+# Nodes default to standalone, with the genuinely-inline tags marked below.
+_hxml_inline(::HyperscriptString) = false
+_hxml_inline(::AbstractString) = true
+_hxml_inline(n::Node) = _hxml_tag_inline(Val(tag(n)))
+_hxml_inline(_) = true
+_hxml_tag_inline(::Val) = false
+for t in (:span, :small, :strong, :b, :em, :i, :code, :a, :sub, :sup, :mark)
+    @eval _hxml_tag_inline(::Val{$(QuoteNode(t))}) = true
+end
+
+# Emit children into a VIEW context: consecutive inline children are grouped
+# into a single <text> run; standalone (block) children emit directly. This is
+# what keeps bare text out of <view> (which Hyperview rejects).
+function _hxml_view_children(io, m, node)
+    inline_open = false
+    for c in children(node)
+        c isa HyperscriptString && continue
+        if _hxml_inline(c)
+            inline_open || print(io, "<text>")
+            inline_open = true
+            show(io, m, c)
+        else
+            inline_open && print(io, "</text>")
+            inline_open = false
+            show(io, m, c)
+        end
+    end
+    inline_open && print(io, "</text>")
+end
+
+# Print the style="…" attribute: the tag-derived style id (or nothing) followed
+# by any `class` tokens, space-joined. Emits nothing when both are absent.
+function _hxml_print_style(io, node, styleid)
+    cls = get(attrs(node), :class, nothing)
+    (styleid === nothing && cls === nothing) && return
+    print(io, " style=\"")
+    need_sep = false
+    if styleid !== nothing
+        print(io, styleid); need_sep = true
+    end
+    if cls !== nothing
+        for tok in split(string(cls))
+            need_sep && print(io, ' ')
+            print(io, _xml_escape(tok)); need_sep = true
+        end
+    end
+    print(io, '"')
+end
+
+# Print id="…" if the node carries one (needed as a <behavior> target).
+_hxml_print_id(io, node) = let id = get(attrs(node), :id, nothing)
+    id === nothing || print(io, " id=\"", _xml_escape(string(id)), '"')
+end
+
+# Open tag: <hxtag id=… style=… extra…>. `extra` = pairs of (name, value); each
+# value is XML-escaped, and a `nothing` value skips the attribute.
+function _hxml_open(io, node, hxtag; styleid=nothing, extra=())
+    print(io, '<', hxtag)
+    _hxml_print_id(io, node)
+    _hxml_print_style(io, node, styleid)
+    for (k, v) in extra
+        v === nothing && continue
+        print(io, ' ', k, "=\"", _xml_escape(string(v)), '"')
+    end
+    print(io, '>')
+end
+
+# <view styleid> + behavior + grouped children + </view>. Block containers.
+function _hxml_view(io, m, node, styleid; default_action="replace-inner", fallback_href=nothing)
+    _hxml_open(io, node, "view"; styleid)
+    _hxml_behavior(io, node; default_action, fallback_href)
+    _hxml_view_children(io, m, node)
+    print(io, "</view>")
+end
+
+# <text styleid> + behavior + text-run children + </text>. Text/inline tags.
+function _hxml_text(io, m, node, styleid; default_action="replace-inner", fallback_href=nothing)
+    _hxml_open(io, node, "text"; styleid)
+    _hxml_behavior(io, node; default_action, fallback_href)
+    _hxml_recurse(io, m, node)
+    print(io, "</text>")
+end
+
+# --- hx-* → <behavior> : the HTMX → Hyperview action bridge (decision 1laq0z0, part 4) ---
+
+# hx-swap → Hyperview action. HTMX's default swap is innerHTML → replace-inner.
+const _HX_SWAP_ACTION = Dict(
+    "innerHTML" => "replace-inner", "outerHTML" => "replace",
+    "beforeend" => "append", "afterbegin" => "prepend",
+)
+# hx-<verb> attr → HTTP verb, in precedence order (keys are hyphenated, as
+# stored by `_attr_symbol`).
+const _HX_VERB_ATTRS = (
+    Symbol("hx-get") => "GET", Symbol("hx-post") => "POST", Symbol("hx-put") => "PUT",
+    Symbol("hx-delete") => "DELETE", Symbol("hx-patch") => "PATCH",
+)
+
+_strip_hash(s) = startswith(s, '#') ? s[nextind(s, 1):end] : s
+
+# HTMX trigger → Hyperview trigger. Polling ("every 2s") → interval; the delay
+# is parsed separately by `_hxml_delay`.
+function _hxml_trigger(t)
+    t === nothing && return "press"
+    s = strip(string(t))
+    startswith(s, "every") && return "interval"
+    s == "click" ? "press" : s   # load / refresh / visible pass through
+end
+# Parse a "<n>s" / "<n>ms" delay out of an interval trigger → milliseconds.
+function _hxml_delay(t)
+    t === nothing && return nothing
+    mt = match(r"every\s+([\d.]+)\s*(ms|s)?", strip(string(t)))
+    mt === nothing && return nothing
+    n = parse(Float64, mt.captures[1])
+    ms = mt.captures[2] == "ms" ? n : n * 1000
+    string(round(Int, ms))
+end
+
+# Emit a <behavior/> child from the node's hx-* attrs (or a fallback href, for a
+# plain <a>). No hx verb and no fallback → nothing (element is non-interactive).
+function _hxml_behavior(io, node; default_action="replace-inner", fallback_href=nothing)
+    a = attrs(node)
+    href = nothing; verb = nothing
+    for (k, v) in _HX_VERB_ATTRS
+        hv = get(a, k, nothing)
+        if hv !== nothing
+            href = string(hv); verb = v; break
+        end
+    end
+    if href === nothing
+        fallback_href === nothing && return
+        href = string(fallback_href); verb = "GET"
+    end
+    swap = get(a, Symbol("hx-swap"), nothing)
+    push = get(a, Symbol("hx-push-url"), nothing)
+    action = swap !== nothing ? get(_HX_SWAP_ACTION, string(swap), "replace-inner") :
+             push !== nothing ? "push" : default_action
+    trig = get(a, Symbol("hx-trigger"), nothing)
+    target = get(a, Symbol("hx-target"), nothing)
+    delay = _hxml_delay(trig)
+    print(io, "<behavior trigger=\"", _hxml_trigger(trig), "\" action=\"", action,
+              "\" href=\"", _xml_escape(href), '"')
+    verb == "GET" || print(io, " verb=\"", verb, '"')
+    target === nothing || print(io, " target=\"", _xml_escape(_strip_hash(string(target))), '"')
+    delay === nothing || print(io, " delay=\"", delay, '"')
+    print(io, " />")
+end
+
+# === Section A: direct element maps ===
+
+# Block containers → <view style="<tag>">.
+for t in (:div, :main, :body, :section, :article, :nav, :footer, :header, :aside,
+          :details, :figure, :blockquote)
+    @eval _hxml(io, m, node::Node, ::Val{$(QuoteNode(t))}) = _hxml_view(io, m, node, $(string(t)))
+end
+# <html>/<head> are page chrome the fragment must not emit — recurse into body.
+for t in (:html, :head)
+    @eval _hxml(io, m, node::Node, ::Val{$(QuoteNode(t))}) = _hxml_recurse(io, m, node)
+end
+
+# Text / heading / label tags → <text style="<tag>">. Inline children nest as
+# text runs (h.p(h.small(…), h.code(…)) → nested <text> runs, not flattened).
+for t in (:p, :small, :span, :strong, :b, :em, :i, :code, :pre, :label,
+          :figcaption, :summary, :title,
+          :h1, :h2, :h3, :h4, :h5, :h6)
+    @eval _hxml(io, m, node::Node, ::Val{$(QuoteNode(t))}) = _hxml_text(io, m, node, $(string(t)))
+end
+
+# <a> → inline <text> + a push behavior (navigation). A plain href with no hx-*
+# still navigates; an hx-swap/hx-target on the <a> overrides the action.
+_hxml(io, m, node::Node, ::Val{:a}) =
+    _hxml_text(io, m, node, "a"; default_action="push", fallback_href=get(attrs(node), :href, nothing))
+
+# Lists: <ul>/<ol> → <view>; each <li> → a <view> row (so nested inline text is
+# wrapped and nested lists/blocks stay valid).
+for t in (:ul, :ol, :li)
+    @eval _hxml(io, m, node::Node, ::Val{$(QuoteNode(t))}) = _hxml_view(io, m, node, $(string(t)))
+end
+
+# <br> → newline within the current text run; <hr> → a styled divider view.
+_hxml(io, m, node::Node, ::Val{:br}) = print(io, "\n")
+_hxml(io, m, node::Node, ::Val{:hr}) = (_hxml_open(io, node, "view"; styleid="hr"); print(io, "</view>"))
+
 # --- Markdown AST → h.* Node conversion ---
 
 """
