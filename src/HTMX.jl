@@ -599,8 +599,9 @@ _hxml_print_id(io, node) = let id = get(attrs(node), :id, nothing)
 end
 
 # Open tag: <hxtag id=… style=… extra…>. `extra` = pairs of (name, value); each
-# value is XML-escaped, and a `nothing` value skips the attribute.
-function _hxml_open(io, node, hxtag; styleid=nothing, extra=())
+# value is XML-escaped, and a `nothing` value skips the attribute. `selfclose`
+# emits `… />` instead of `…>` (self-closing leaf elements: fields, <image>).
+function _hxml_open(io, node, hxtag; styleid=nothing, extra=(), selfclose=false)
     print(io, '<', hxtag)
     _hxml_print_id(io, node)
     _hxml_print_style(io, node, styleid)
@@ -608,7 +609,7 @@ function _hxml_open(io, node, hxtag; styleid=nothing, extra=())
         v === nothing && continue
         print(io, ' ', k, "=\"", _xml_escape(string(v)), '"')
     end
-    print(io, '>')
+    print(io, selfclose ? " />" : ">")
 end
 
 # <view styleid> + behavior + grouped children + </view>. Block containers.
@@ -620,9 +621,9 @@ function _hxml_view(io, m, node, styleid; default_action="replace-inner", fallba
 end
 
 # <text styleid> + behavior + text-run children + </text>. Text/inline tags.
-function _hxml_text(io, m, node, styleid; default_action="replace-inner", fallback_href=nothing)
+function _hxml_text(io, m, node, styleid; default_action="replace-inner", fallback_href=nothing, fallback_form=nothing)
     _hxml_open(io, node, "text"; styleid)
-    _hxml_behavior(io, node; default_action, fallback_href)
+    _hxml_behavior(io, node; default_action, fallback_href, fallback_form)
     _hxml_recurse(io, m, node)
     print(io, "</text>")
 end
@@ -661,32 +662,46 @@ function _hxml_delay(t)
     string(round(Int, ms))
 end
 
-# Emit a <behavior/> child from the node's hx-* attrs (or a fallback href, for a
-# plain <a>). No hx verb and no fallback → nothing (element is non-interactive).
-function _hxml_behavior(io, node; default_action="replace-inner", fallback_href=nothing)
-    a = attrs(node)
+# Resolve (href, verb, action, target) from a node's hx-* attrs, honouring a
+# fallback href (a plain <a>) and a default action; target is #-stripped.
+# Returns all-nothing when the node carries no hx-verb and no fallback.
+function _hx_request(a; default_action="replace-inner", fallback_href=nothing)
     href = nothing; verb = nothing
     for (k, v) in _HX_VERB_ATTRS
         hv = get(a, k, nothing)
-        if hv !== nothing
-            href = string(hv); verb = v; break
-        end
+        hv === nothing || (href = string(hv); verb = v; break)
     end
     if href === nothing
-        fallback_href === nothing && return
+        fallback_href === nothing && return (nothing, nothing, nothing, nothing)
         href = string(fallback_href); verb = "GET"
     end
     swap = get(a, Symbol("hx-swap"), nothing)
     push = get(a, Symbol("hx-push-url"), nothing)
     action = swap !== nothing ? get(_HX_SWAP_ACTION, string(swap), "replace-inner") :
              push !== nothing ? "push" : default_action
+    tgt = get(a, Symbol("hx-target"), nothing)
+    target = tgt === nothing ? nothing : _strip_hash(string(tgt))
+    (href, verb, action, target)
+end
+
+# Emit a <behavior/> child from the node's hx-* attrs, a fallback href (plain
+# <a>), or an inherited form-submit request (a submit control inside a <form>).
+# None present → nothing (the element is non-interactive). The `trigger` is
+# always taken from the node itself (a submit presses; a poll intervals), even
+# when the rest of the request is inherited from the form.
+function _hxml_behavior(io, node; default_action="replace-inner", fallback_href=nothing, fallback_form=nothing)
+    a = attrs(node)
+    href, verb, action, target = _hx_request(a; default_action, fallback_href)
+    if href === nothing
+        fallback_form === nothing && return
+        href, verb, action, target = fallback_form
+    end
     trig = get(a, Symbol("hx-trigger"), nothing)
-    target = get(a, Symbol("hx-target"), nothing)
     delay = _hxml_delay(trig)
     print(io, "<behavior trigger=\"", _hxml_trigger(trig), "\" action=\"", action,
               "\" href=\"", _xml_escape(href), '"')
     verb == "GET" || print(io, " verb=\"", verb, '"')
-    target === nothing || print(io, " target=\"", _xml_escape(_strip_hash(string(target))), '"')
+    target === nothing || print(io, " target=\"", _xml_escape(target), '"')
     delay === nothing || print(io, " delay=\"", delay, '"')
     print(io, " />")
 end
@@ -725,6 +740,90 @@ end
 # <br> → newline within the current text run; <hr> → a styled divider view.
 _hxml(io, m, node::Node, ::Val{:br}) = print(io, "\n")
 _hxml(io, m, node::Node, ::Val{:hr}) = (_hxml_open(io, node, "view"; styleid="hr"); print(io, "</view>"))
+
+# === Section B: components ===
+
+# <button> → tappable <text> + behavior. Its own hx-* wins; otherwise it submits
+# the enclosing <form> (if any) via the inherited form-submit target.
+_hxml(io, m, node::Node, ::Val{:button}) =
+    _hxml_text(io, m, node, "button"; fallback_form=_hxml_form_submit())
+
+# Tables → nested flexbox <view>s (Hyperview has no <table>): the chrome styles
+# "tr" as a row and "th"/"td" as flexed cells. Header click-to-sort is JS
+# (onclick) with no Hyperview equivalent, so cells render statically.
+for t in (:table, :thead, :tbody, :tfoot, :tr, :th, :td)
+    @eval _hxml(io, m, node::Node, ::Val{$(QuoteNode(t))}) = _hxml_view(io, m, node, $(string(t)))
+end
+
+# <img> → self-closing <image source=…> (Hyperview uses `source`, not `src`).
+_hxml(io, m, node::Node, ::Val{:img}) =
+    _hxml_open(io, node, "image"; styleid="img", selfclose=true,
+        extra=(("source", get(attrs(node), :src, nothing)),))
+
+# --- forms ---
+
+# <form> → <form>. The form's hx-post/hx-get becomes the submit target that
+# descendant <button>/<input type=submit> controls inherit; when such a control
+# fires, Hyperview collects every <form> field's name/value into the request.
+_hxml(io, m, node::Node, ::Val{:form}) = _hxml_form(io, m, node)
+function _hxml_form(io, m, node)
+    _hxml_open(io, node, "form"; styleid="form")
+    req = _hx_request(attrs(node))
+    if req[1] === nothing
+        _hxml_view_children(io, m, node)
+    else
+        task_local_storage(() -> _hxml_view_children(io, m, node), :hxml_form_submit, req)
+    end
+    print(io, "</form>")
+end
+# The enclosing form's submit target, or nothing outside a form.
+_hxml_form_submit() = get(task_local_storage(), :hxml_form_submit, nothing)
+
+# <input> → a form field, dispatched on its `type`.
+_hxml(io, m, node::Node, ::Val{:input}) =
+    _hxml_input(io, node, Val(Symbol(lowercase(string(get(attrs(node), :type, "text"))))))
+# Self-closing field with name/value/placeholder passthrough.
+function _hxml_field(io, node, hxtag; extra=())
+    a = attrs(node)
+    _hxml_open(io, node, hxtag; styleid=hxtag, selfclose=true,
+        extra=(("name", get(a, :name, nothing)),
+               ("value", get(a, :value, nothing)),
+               ("placeholder", get(a, :placeholder, nothing)),
+               extra...))
+end
+_hxml_input(io, node, ::Val)             = _hxml_field(io, node, "text-field")   # text/email/number/…
+_hxml_input(io, node, ::Val{:checkbox})  = _hxml_field(io, node, "switch")
+_hxml_input(io, node, ::Val{:radio})     = _hxml_field(io, node, "switch")
+_hxml_input(io, node, ::Val{:hidden})    = _hxml_field(io, node, "text-field"; extra=(("hide", "true"),))
+function _hxml_input(io, node, ::Val{:submit})
+    _hxml_open(io, node, "text"; styleid="submit")
+    _hxml_behavior(io, node; fallback_form=_hxml_form_submit())
+    print(io, _xml_escape(string(get(attrs(node), :value, "Submit"))), "</text>")
+end
+
+# <textarea> → <text-area name>value</text-area> (value = its text children).
+function _hxml(io, m, node::Node, ::Val{:textarea})
+    _hxml_open(io, node, "text-area"; styleid="text-area",
+        extra=(("name", get(attrs(node), :name, nothing)),))
+    _hxml_recurse(io, m, node)
+    print(io, "</text-area>")
+end
+
+# <select> → <select-single>/<select-multiple>; each <option> wraps its label
+# text in a <text> (Hyperview's option content model).
+function _hxml(io, m, node::Node, ::Val{:select})
+    hxtag = haskey(attrs(node), :multiple) ? "select-multiple" : "select-single"
+    _hxml_open(io, node, hxtag; styleid="select",
+        extra=(("name", get(attrs(node), :name, nothing)),))
+    _hxml_view_children(io, m, node)
+    print(io, "</", hxtag, '>')
+end
+function _hxml(io, m, node::Node, ::Val{:option})
+    _hxml_open(io, node, "option"; styleid="option",
+        extra=(("value", get(attrs(node), :value, nothing)),))
+    _hxml_view_children(io, m, node)
+    print(io, "</option>")
+end
 
 # --- Markdown AST → h.* Node conversion ---
 
