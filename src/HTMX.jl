@@ -877,6 +877,9 @@ function _hxml_field(io, node, hxtag; extra=())
                extra...))
 end
 _hxml_input(io, node, ::Val)             = _hxml_field(io, node, "text-field")   # text/email/number/…
+# <input type="date"> → Hyperview's native <date-field> (a real native date
+# picker), not a plain text field. Native-fidelity investment (decision 1w08p5y).
+_hxml_input(io, node, ::Val{:date})      = _hxml_field(io, node, "date-field")
 _hxml_input(io, node, ::Val{:checkbox})  = _hxml_field(io, node, "switch")
 _hxml_input(io, node, ::Val{:radio})     = _hxml_field(io, node, "switch")
 _hxml_input(io, node, ::Val{:hidden})    = _hxml_field(io, node, "text-field"; extra=(("hide", "true"),))

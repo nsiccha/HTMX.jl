@@ -650,3 +650,17 @@ into the consumer-owned `doc/screen/styles/body` envelope.
     doc = "<doc><screen>" * styles * "<body>" * fragment * "</body></screen></doc>"
     @test well_formed_xml(doc)
 end
+
+"""
+HTML date, text, and checkbox inputs map to their native Hyperview field
+elements rather than degrading to generic views.
+"""
+@testitem "hxml - native form fields" setup=[HTMXTestHelpers] tags=[:unit, :hxml, :forms] begin
+    @test hxml(h.input(type="date", name="due", value="2026-07-31")) ==
+        "<date-field style=\"date-field\" name=\"due\" value=\"2026-07-31\" />"
+    @test hxml(h.input(type="text", name="q")) ==
+        "<text-field style=\"text-field\" name=\"q\" />"
+    @test hxml(h.input(type="checkbox", name="ok")) ==
+        "<switch style=\"switch\" name=\"ok\" />"
+    @test well_formed_xml(hxml(h.input(type="date", name="due", value="2026-07-31")))
+end
