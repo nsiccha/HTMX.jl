@@ -7,6 +7,30 @@ using TestItemRunner
     # Render a `Node` to its HTML / Markdown string form.
     html(node) = repr("text/html", node)
     to_md(node) = repr("text/markdown", node)
+    hxml(node) = repr("application/vnd.hyperview+xml", node)
+
+    # Minimal dependency-free XML well-formedness check: start tags are
+    # balanced and properly nested.
+    function well_formed_xml(s)
+        stack = String[]
+        i = firstindex(s)
+        while true
+            lt = findnext('<', s, i)
+            lt === nothing && break
+            gt = findnext('>', s, lt)
+            gt === nothing && return false
+            body = strip(s[nextind(s, lt):prevind(s, gt)])
+            if startswith(body, '/')
+                isempty(stack) && return false
+                pop!(stack) == strip(body[nextind(body, firstindex(body)):end]) ||
+                    return false
+            elseif !endswith(body, '/')
+                push!(stack, String(first(split(body))))
+            end
+            i = nextind(s, gt)
+        end
+        isempty(stack)
+    end
 end
 
 # ================================================================
@@ -505,4 +529,73 @@ keeping inline formatting.
 @testitem "markdown - header and title" setup=[HTMXTestHelpers] tags=[:unit, :markdown] begin
     @test to_md(h.header("Section")) == "### Section\n"
     @test to_md(h.title("Page ", h.code("Title"))) == "# Page `Title`\n"
+end
+
+# ================================================================
+# HXML (Hyperview) rendering
+# ================================================================
+
+"""
+`navigator` and `nav-route` preserve the native Hyperview container shape,
+including the default stack type, self-closing routes, and escaped URLs.
+"""
+@testitem "hxml - navigator and nav-route containers" setup=[HTMXTestHelpers] tags=[:unit, :hxml, :navigation] begin
+    @test hxml(h.navigator(
+        h.var"nav-route"(href="/hxml", id="home");
+        id="root",
+        type="stack",
+    )) ==
+        "<navigator id=\"root\" type=\"stack\"><nav-route id=\"home\" href=\"/hxml\" /></navigator>"
+    @test hxml(h.var"nav-route"()) == "<nav-route />"
+    @test hxml(h.navigator(; id="x")) ==
+        "<navigator id=\"x\" type=\"stack\"></navigator>"
+    @test hxml(h.navigator(
+        h.var"nav-route"(href="/a", id="a"),
+        h.var"nav-route"(href="/b", id="b");
+        id="t",
+        type="tab",
+    )) ==
+        "<navigator id=\"t\" type=\"tab\"><nav-route id=\"a\" href=\"/a\" /><nav-route id=\"b\" href=\"/b\" /></navigator>"
+    @test hxml(h.var"nav-route"(href="/x?a=1&b=2")) ==
+        "<nav-route href=\"/x?a=1&amp;b=2\" />"
+end
+
+"""
+Explicit Hyperview behavior nodes cover the full action surface, and implicit
+anchor navigation uses the same behavior emitter.
+"""
+@testitem "hxml - explicit behavior actions" setup=[HTMXTestHelpers] tags=[:unit, :hxml, :navigation] begin
+    @test hxml(h.behavior(action="push", trigger="press", href="/x")) ==
+        "<behavior trigger=\"press\" action=\"push\" href=\"/x\" />"
+    @test hxml(h.behavior(action="back")) ==
+        "<behavior trigger=\"press\" action=\"back\" />"
+    @test hxml(h.behavior(action="navigate", href="/y", target="main")) ==
+        "<behavior trigger=\"press\" action=\"navigate\" href=\"/y\" target=\"main\" />"
+    @test hxml(h.behavior(
+        action="replace-inner",
+        trigger="load",
+        href="/z",
+        delay="500",
+    )) ==
+        "<behavior trigger=\"load\" action=\"replace-inner\" href=\"/z\" delay=\"500\" />"
+    @test hxml(h.behavior(action="new", href="/modal", verb="POST")) ==
+        "<behavior trigger=\"press\" action=\"new\" href=\"/modal\" verb=\"POST\" />"
+    @test hxml(h.a("Home", href="/home")) ==
+        "<text style=\"a\"><behavior trigger=\"press\" action=\"push\" href=\"/home\" />Home</text>"
+end
+
+"""
+Representative navigation, behavior, link, and table output is balanced XML;
+the local checker also rejects a mismatched closing tag.
+"""
+@testitem "hxml - emission is well formed" setup=[HTMXTestHelpers] tags=[:unit, :hxml, :xml] begin
+    @test well_formed_xml(hxml(h.navigator(
+        h.var"nav-route"(href="/hxml", id="home");
+        id="root",
+        type="stack",
+    )))
+    @test well_formed_xml(hxml(h.behavior(action="back")))
+    @test well_formed_xml(hxml(h.a("Home", href="/home")))
+    @test well_formed_xml(hxml(h.table(h.tr(h.th("A"), h.td("1")))))
+    @test !well_formed_xml("<navigator><nav-route /></wrong>")
 end
