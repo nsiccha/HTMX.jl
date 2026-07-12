@@ -565,9 +565,11 @@ for t in (:div, :main, :body, :section, :article, :nav, :footer, :header, :aside
     @eval _hxml_tag_inline(::Val{$(QuoteNode(t))}) = false
 end
 # Navigation containers (Hyperview-native) are standalone — never grouped into a
-# <text> run; they sit at the <doc> level, not inside a <view>.
+# <text> run; they sit at the <doc> level, not inside a <view>. A <behavior> is
+# a direct child of the element it acts on (emitted first), never a text run.
 _hxml_tag_inline(::Val{:navigator}) = false
 _hxml_tag_inline(::Val{Symbol("nav-route")}) = false
+_hxml_tag_inline(::Val{:behavior}) = false
 
 # Emit children into a VIEW context: consecutive inline children are grouped
 # into a single <text> run; standalone (block) children emit directly. This is
@@ -704,6 +706,19 @@ end
 # None present → nothing (the element is non-interactive). The `trigger` is
 # always taken from the node itself (a submit presses; a poll intervals), even
 # when the rest of the request is inherited from the form.
+# Emit <behavior/> markup from resolved fields — the single behavior emitter,
+# shared by the implicit hx-* derivation and the explicit h.behavior(...) tag so
+# both serialize identically. Self-closing leaf; href omits when absent (back /
+# close / new carry none), verb omits when GET or absent.
+function _hxml_behavior_tag(io; trigger, action, href=nothing, verb=nothing, target=nothing, delay=nothing)
+    print(io, "<behavior trigger=\"", trigger, "\" action=\"", _xml_escape(string(action)), '"')
+    href === nothing || print(io, " href=\"", _xml_escape(string(href)), '"')
+    (verb === nothing || verb == "GET") || print(io, " verb=\"", verb, '"')
+    target === nothing || print(io, " target=\"", _xml_escape(string(target)), '"')
+    delay === nothing || print(io, " delay=\"", delay, '"')
+    print(io, " />")
+end
+
 function _hxml_behavior(io, node; default_action="replace-inner", fallback_href=nothing, fallback_form=nothing)
     a = attrs(node)
     href, verb, action, target = _hx_request(a; default_action, fallback_href)
@@ -712,13 +727,23 @@ function _hxml_behavior(io, node; default_action="replace-inner", fallback_href=
         href, verb, action, target = fallback_form
     end
     trig = get(a, Symbol("hx-trigger"), nothing)
-    delay = _hxml_delay(trig)
-    print(io, "<behavior trigger=\"", _hxml_trigger(trig), "\" action=\"", action,
-              "\" href=\"", _xml_escape(href), '"')
-    verb == "GET" || print(io, " verb=\"", verb, '"')
-    target === nothing || print(io, " target=\"", _xml_escape(target), '"')
-    delay === nothing || print(io, " delay=\"", delay, '"')
-    print(io, " />")
+    _hxml_behavior_tag(io; trigger=_hxml_trigger(trig), action, href, verb, target, delay=_hxml_delay(trig))
+end
+
+# <behavior> as an explicit tag: h.behavior(action=…, trigger=…, href=…, verb=…,
+# target=…, delay=…). Lets HTMXObjects' NavIntent declare the FULL Hyperview
+# action set uniformly by building Nodes — push/replace/swap AND back/navigate/
+# new/close — rather than hand-writing HXML. Shares _hxml_behavior_tag, so
+# explicit and html-derived behaviors serialize identically. trigger defaults to
+# press, action to push.
+_hxml(io, m, node::Node, ::Val{:behavior}) = let a = attrs(node)
+    _hxml_behavior_tag(io;
+        trigger = something(get(a, :trigger, nothing), "press"),
+        action  = something(get(a, :action, nothing), "push"),
+        href    = get(a, :href, nothing),
+        verb    = get(a, :verb, nothing),
+        target  = get(a, :target, nothing),
+        delay   = get(a, :delay, nothing))
 end
 
 # === Section A: direct element maps ===
