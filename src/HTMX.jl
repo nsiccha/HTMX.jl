@@ -564,6 +564,10 @@ for t in (:div, :main, :body, :section, :article, :nav, :footer, :header, :aside
           :script, :style, :meta, :link, :datalist)
     @eval _hxml_tag_inline(::Val{$(QuoteNode(t))}) = false
 end
+# Navigation containers (Hyperview-native) are standalone — never grouped into a
+# <text> run; they sit at the <doc> level, not inside a <view>.
+_hxml_tag_inline(::Val{:navigator}) = false
+_hxml_tag_inline(::Val{Symbol("nav-route")}) = false
 
 # Emit children into a VIEW context: consecutive inline children are grouped
 # into a single <text> run; standalone (block) children emit directly. This is
@@ -789,6 +793,38 @@ function _hxml_form(io, m, node)
 end
 # The enclosing form's submit target, or nothing outside a form.
 _hxml_form_submit() = get(task_local_storage(), :hxml_form_submit, nothing)
+
+# === Section: navigation (Hyperview-native containers, no HTML equivalent) ===
+#
+# <navigator>/<nav-route> ARE the client navigation stack: Hyperview mounts a
+# stack only when the doc root is a <navigator> (a bare <screen> has none, so
+# push/back can't initialise — the invoices-mobile entrypoint gap). They carry
+# no style/behaviour — they're the stack machine, not rendered content. The
+# framework (HTMXObjects) builds them from route metadata and composes them into
+# the <doc> chrome; the serializer just emits the tag surface, so one navigation
+# description dual-serialises (→ <a hx-push-url> for HTML, → <navigator> here).
+function _hxml(io, m, node::Node, ::Val{:navigator})
+    print(io, "<navigator")
+    _hxml_print_id(io, node)
+    print(io, " type=\"", _xml_escape(string(get(attrs(node), :type, "stack"))), "\">")
+    _hxml_recurse(io, m, node)
+    print(io, "</navigator>")
+end
+# <nav-route href> references a screen by route: a self-closing leaf, unless it
+# carries inline content (an eager <doc>/modal), in which case it wraps it.
+function _hxml(io, m, node::Node, ::Val{Symbol("nav-route")})
+    print(io, "<nav-route")
+    _hxml_print_id(io, node)
+    href = get(attrs(node), :href, nothing)
+    href === nothing || print(io, " href=\"", _xml_escape(string(href)), '"')
+    if isempty(children(node))
+        print(io, " />")
+    else
+        print(io, '>')
+        _hxml_recurse(io, m, node)
+        print(io, "</nav-route>")
+    end
+end
 
 # <input> → a form field, dispatched on its `type`.
 _hxml(io, m, node::Node, ::Val{:input}) =
