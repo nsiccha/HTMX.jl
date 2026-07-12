@@ -652,12 +652,29 @@ into the consumer-owned `doc/screen/styles/body` envelope.
 end
 
 """
-HTML date, text, and checkbox inputs map to their native Hyperview field
-elements rather than degrading to generic views.
+HTML form inputs map to native Hyperview fields, including the required ISO
+date label format, min/max bounds, keyboard hints, and secure passwords.
 """
 @testitem "hxml - native form fields" setup=[HTMXTestHelpers] tags=[:unit, :hxml, :forms] begin
     @test hxml(h.input(type="date", name="due", value="2026-07-31")) ==
-        "<date-field style=\"date-field\" name=\"due\" value=\"2026-07-31\" />"
+        "<date-field style=\"date-field\" name=\"due\" value=\"2026-07-31\" label-format=\"YYYY-MM-DD\" />"
+    @test hxml(h.input(
+        type="date",
+        name="d",
+        min="2026-01-01",
+        max="2026-12-31",
+    )) ==
+        "<date-field style=\"date-field\" name=\"d\" label-format=\"YYYY-MM-DD\" min=\"2026-01-01\" max=\"2026-12-31\" />"
+    @test hxml(h.input(type="email", name="e")) ==
+        "<text-field style=\"text-field\" name=\"e\" keyboard-type=\"email-address\" />"
+    @test hxml(h.input(type="number", name="n")) ==
+        "<text-field style=\"text-field\" name=\"n\" keyboard-type=\"decimal-pad\" />"
+    @test hxml(h.input(type="tel", name="p")) ==
+        "<text-field style=\"text-field\" name=\"p\" keyboard-type=\"phone-pad\" />"
+    @test hxml(h.input(type="url", name="u")) ==
+        "<text-field style=\"text-field\" name=\"u\" keyboard-type=\"url\" />"
+    @test hxml(h.input(type="password", name="pw")) ==
+        "<text-field style=\"text-field\" name=\"pw\" secure-text=\"true\" />"
     @test hxml(h.input(type="text", name="q")) ==
         "<text-field style=\"text-field\" name=\"q\" />"
     @test hxml(h.input(type="checkbox", name="ok")) ==

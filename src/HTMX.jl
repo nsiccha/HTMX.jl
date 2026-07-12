@@ -876,10 +876,26 @@ function _hxml_field(io, node, hxtag; extra=())
                ("placeholder", get(a, :placeholder, nothing)),
                extra...))
 end
-_hxml_input(io, node, ::Val)             = _hxml_field(io, node, "text-field")   # text/email/number/…
+_hxml_input(io, node, ::Val)             = _hxml_field(io, node, "text-field")   # text/search/unknown
+# Native keyboard-type / secure-text hints (Hyperview <text-field> attrs) so the
+# right native keyboard / secure entry shows per input type. (Decision 1w08p5y.)
+_hxml_input(io, node, ::Val{:email})     = _hxml_field(io, node, "text-field"; extra=(("keyboard-type", "email-address"),))
+_hxml_input(io, node, ::Val{:number})    = _hxml_field(io, node, "text-field"; extra=(("keyboard-type", "decimal-pad"),))
+_hxml_input(io, node, ::Val{:tel})       = _hxml_field(io, node, "text-field"; extra=(("keyboard-type", "phone-pad"),))
+_hxml_input(io, node, ::Val{:url})       = _hxml_field(io, node, "text-field"; extra=(("keyboard-type", "url"),))
+_hxml_input(io, node, ::Val{:password})  = _hxml_field(io, node, "text-field"; extra=(("secure-text", "true"),))
 # <input type="date"> → Hyperview's native <date-field> (a real native date
-# picker), not a plain text field. Native-fidelity investment (decision 1w08p5y).
-_hxml_input(io, node, ::Val{:date})      = _hxml_field(io, node, "date-field")
+# picker). `label-format` is REQUIRED by Hyperview; HTML has no display-format
+# attr, so default to ISO "YYYY-MM-DD" (override via a `label-format` attr).
+# min/max (ISO dates) pass through. Native-fidelity investment (decision 1w08p5y).
+function _hxml_input(io, node, ::Val{:date})
+    a = attrs(node)
+    _hxml_field(io, node, "date-field"; extra=(
+        ("label-format", get(a, Symbol("label-format"), "YYYY-MM-DD")),
+        ("min", get(a, :min, nothing)),
+        ("max", get(a, :max, nothing)),
+    ))
+end
 _hxml_input(io, node, ::Val{:checkbox})  = _hxml_field(io, node, "switch")
 _hxml_input(io, node, ::Val{:radio})     = _hxml_field(io, node, "switch")
 _hxml_input(io, node, ::Val{:hidden})    = _hxml_field(io, node, "text-field"; extra=(("hide", "true"),))
