@@ -501,14 +501,27 @@ end
 # recurse transparently as nested runs.
 #
 # Styling: Hyperview has no CSS — elements reference styles by id
-# (style="foo"), defined in the chrome's <styles> block. A style id is derived
-# from the semantic tag (h.small → style="small") plus any `class` tokens
-# (h.div(class="row") → style="row"); the chrome (HTMXObjects) must define
-# matching ids. The tag-derived vocabulary: div/section/… view ids, the text
-# ids (p small span strong em code pre h1..h6 li a label header … th td), plus
+# (style="foo"), defined in the chrome's <styles> block. EVERY element carries a
+# style id derived from its semantic tag (h.small → style="small") FOLLOWED by
+# any `class` tokens, space-joined (h.div(class="row") → style="div row"); the
+# chrome (HTMXObjects) supplies a matching tag-name stylesheet — so <view
+# style="div"> picks up a sane default and the app extends/overrides per class.
+# The client IGNORES undefined style ids, so styling purely by class is safe: the
+# tag-name prefix is harmlessly undefined. An inline CSS `style="color:red"` has
+# no Hyperview equivalent (style= is an id reference list, not a declaration) and
+# is DROPPED. The tag-derived vocabulary: div/section/… view ids, the text ids
+# (p small span strong em code pre h1..h6 li a label header … th td), plus
 # whatever `class` tokens the app uses.
 
 const _hxml_mime = MIME"application/vnd.hyperview+xml"()
+
+# HXML is a text format (an XML dialect), exactly like text/html and
+# text/markdown — both of which Base already registers as text mimes (which is
+# why `repr("text/html", node)` returns a String). Base doesn't know this vendor
+# MIME, so register it: without this, `repr(mime, node)` returns a Vector{UInt8},
+# surprising callers who serialize HXML the same way they serialize the HTML
+# rendering, and breaking String-level tests/assertions on the output.
+Base.istextmime(::MIME{Symbol("application/vnd.hyperview+xml")}) = true
 
 # XML escaping for element text and double-quoted attribute values. Note the
 # apostrophe → &apos; (XML), distinct from the HTML serializer's &#39;.

@@ -599,3 +599,54 @@ the local checker also rejects a mismatched closing tag.
     @test well_formed_xml(hxml(h.table(h.tr(h.th("A"), h.td("1")))))
     @test !well_formed_xml("<navigator><nav-route /></wrong>")
 end
+
+"""
+The vendor HXML MIME is registered as text, so `repr` returns the same
+String-shaped result callers receive for HTML and Markdown.
+"""
+@testitem "hxml - repr returns a String" setup=[HTMXTestHelpers] tags=[:unit, :hxml, :mime] begin
+    rendered = repr("application/vnd.hyperview+xml", h.div())
+    @test rendered isa String
+    @test rendered == "<view style=\"div\"></view>"
+end
+
+"""
+HTMX emits a body fragment whose tag-first style ids and behaviors compose
+into the consumer-owned `doc/screen/styles/body` envelope.
+"""
+@testitem "hxml - end-to-end consumer screen" setup=[HTMXTestHelpers] tags=[:integration, :hxml, :consumer] begin
+    fragment = hxml(h.div(class="card")(
+        h.h2("Invoice"),
+        h.p(h.small("due "), h.code("2026-07-31")),
+        h.ul(h.li(h.a("Open", href="/inv/1"))),
+        h.button("Refresh"; hx_get="/inv/1/rows", hx_target="#content"),
+    ))
+
+    @test occursin("<view style=\"div card\">", fragment)
+    @test occursin("<text style=\"h2\">Invoice</text>", fragment)
+    @test occursin("<text style=\"small\">", fragment)
+    @test occursin(
+        "<behavior trigger=\"press\" action=\"push\" href=\"/inv/1\" />",
+        fragment,
+    )
+    @test occursin(
+        "action=\"replace-inner\" href=\"/inv/1/rows\" target=\"content\"",
+        fragment,
+    )
+
+    dropped = hxml(h.div(style="color:red")("x"))
+    @test !occursin("color:red", dropped)
+    @test occursin("<view style=\"div\">", dropped)
+
+    styles = "<styles>" *
+        "<style id=\"div\" flexDirection=\"column\" />" *
+        "<style id=\"card\" padding=\"16\" />" *
+        "<style id=\"h2\" fontSize=\"20\" />" *
+        "<style id=\"small\" color=\"gray\" />" *
+        "<style id=\"code\" fontFamily=\"monospace\" />" *
+        "<style id=\"ul\" /><style id=\"li\" />" *
+        "<style id=\"a\" color=\"blue\" /><style id=\"button\" />" *
+        "</styles>"
+    doc = "<doc><screen>" * styles * "<body>" * fragment * "</body></screen></doc>"
+    @test well_formed_xml(doc)
+end
