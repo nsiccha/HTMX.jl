@@ -555,17 +555,24 @@ end
 
 # --- element emit helpers ---
 
-# Is this child inline (groups into an anonymous <text> run inside a view) or
-# standalone (emits its own top-level element)? Strings/bare values are inline.
+# Does this view child need to be grouped into an anonymous <text> run? A <view>
+# may not hold bare text directly (Hyperview rejects it), so any child that
+# serializes to BARE TEXT — a raw String, an arbitrary value, or a transparent
+# tag like <time>/<abbr> that recurses to bare text — must be wrapped. A child
+# that EMITS ITS OWN element (a <view>/<text>/<image>/…) is already valid inside
+# the <view> and emits as-is, becoming its own flex child. `true` ⟹ wrap/group.
 _hxml_inline(::HyperscriptString) = false
 _hxml_inline(::AbstractString) = true
 _hxml_inline(n::Node) = _hxml_tag_inline(Val(tag(n)))
 _hxml_inline(_) = true
-# Unknown tags default to INLINE, so an unrecognised inline text tag (time, abbr,
-# cite, q, …) groups into a <text> run instead of leaking bare text into a <view>
-# (which Hyperview rejects). Every tag that emits its own <view> or block-level
-# <text> is marked standalone (false) below; the remaining known inline text tags
-# (span/small/strong/em/code/a/…) just ride the default.
+# Unknown tags default to `true` (wrap): an unrecognised inline text tag (time,
+# cite, q, …) recurses to bare text, so grouping keeps that text out of the
+# <view>. Every tag whose _hxml method emits its OWN element is marked `false`
+# (emit direct): the block/view tags AND the inline text tags
+# (span/small/strong/b/em/i/code/a) that render to their own <text>. Wrapping
+# THOSE would collapse several <text> elements into a single flex child — two
+# <span>s must stay two <text> children of the <view> for a row layout to
+# space-between them (the reported kv bug).
 _hxml_tag_inline(::Val) = true
 for t in (:div, :main, :body, :section, :article, :nav, :footer, :header, :aside,
           :details, :figure, :blockquote, :html, :head,
@@ -574,6 +581,7 @@ for t in (:div, :main, :body, :section, :article, :nav, :footer, :header, :aside
           :form, :fieldset, :select, :textarea, :input, :button, :option,
           :img, :hr, :p, :pre, :label, :figcaption, :summary, :title,
           :h1, :h2, :h3, :h4, :h5, :h6,
+          :span, :small, :strong, :b, :em, :i, :code, :a,
           :script, :style, :meta, :link, :datalist)
     @eval _hxml_tag_inline(::Val{$(QuoteNode(t))}) = false
 end

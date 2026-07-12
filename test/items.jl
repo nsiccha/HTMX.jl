@@ -681,3 +681,27 @@ date label format, min/max bounds, keyboard hints, and secure passwords.
         "<switch style=\"switch\" name=\"ok\" />"
     @test well_formed_xml(hxml(h.input(type="date", name="due", value="2026-07-31")))
 end
+
+"""
+A view groups only bare inline text. Children that emit their own Hyperview
+`text` elements remain direct siblings so flex layouts can distribute them.
+"""
+@testitem "hxml - views preserve self-text inline siblings" setup=[HTMXTestHelpers] tags=[:unit, :hxml, :layout] begin
+    @test hxml(h.div(class="kv")(
+        h.span(class="kv-label")("k"),
+        h.span(class="kv-value")("v"),
+    )) ==
+        "<view style=\"div kv\"><text style=\"span kv-label\">k</text><text style=\"span kv-value\">v</text></view>"
+    @test hxml(h.div(h.span("T"))) ==
+        "<view style=\"div\"><text style=\"span\">T</text></view>"
+    @test hxml(h.div("hello")) ==
+        "<view style=\"div\"><text>hello</text></view>"
+    @test hxml(h.div(h.time("2pm"), h.time("3pm"))) ==
+        "<view style=\"div\"><text>2pm3pm</text></view>"
+    @test hxml(h.p("Hello ", h.strong("world"), "!")) ==
+        "<text style=\"p\">Hello <text style=\"strong\">world</text>!</text>"
+    @test well_formed_xml(hxml(h.div(class="kv")(
+        h.span(class="kv-label")("k"),
+        h.span(class="kv-value")("v"),
+    )))
+end
