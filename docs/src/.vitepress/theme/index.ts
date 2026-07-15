@@ -16,9 +16,8 @@ import Banner from '@/Banner.vue'
 
 import { enhanceAppWithTabs } from 'vitepress-plugin-tabs/client'
 
-// Synced from HTMXObjects/assets/vitepress/htmxo-embed.ts by
-// `HTMXObjects.vitepress_theme_install` in make.jl. Don't edit in place
-// — edit the upstream and re-run make.jl.
+// Static snapshots from HTMXObjects/assets/vitepress/ at 017e5b7.
+// Re-sync these three htmxo-* files locally when upstream changes.
 import { setupHtmxoEmbed } from './htmxo-embed'
 
 import '@nolebase/vitepress-plugin-enhanced-readabilities/client/style.css'
