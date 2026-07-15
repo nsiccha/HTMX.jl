@@ -360,6 +360,112 @@ formatting (bold, code, link).
 end
 
 """
+GFM task-list markers become disabled checkbox inputs. Checked markers accept
+both lowercase and uppercase `x`, while unchecked items omit `checked`.
+"""
+@testitem "md_to_node - task lists" setup=[HTMXTestHelpers] tags=[:unit, :markdown, :parser] begin
+    node = md_to_node("- [ ] pending\n- [x] done\n- [X] loud")
+    list = only(HTMX.children(node))
+    items = HTMX.children(list)
+    inputs = [first(HTMX.children(item)) for item in items]
+
+    @test HTMX.tag(list) === :ul
+    @test length(items) == 3
+    @test all(input -> HTMX.tag(input) === :input, inputs)
+    @test all(input -> HTMX.attrs(input)[:disabled] == "true", inputs)
+    @test !haskey(HTMX.attrs(inputs[1]), :checked)
+    @test HTMX.attrs(inputs[2])[:checked] == "true"
+    @test HTMX.attrs(inputs[3])[:checked] == "true"
+    @test occursin("> pending</li>", html(node))
+end
+
+"""
+MultiMarkdown empty cells extend the preceding cell. Spanning headers opt out
+of click-to-sort behavior, while ordinary headers retain their source column
+index for `sortTable`.
+"""
+@testitem "md_to_node - colspan and sortable tables" setup=[HTMXTestHelpers] tags=[:unit, :markdown, :parser, :tables] begin
+    node = md_to_node(
+        "| A | Group | | D |\n" *
+        "|:---|:---:|---:|---|\n" *
+        "| 1 | 2 | | 4 |",
+    )
+    table = only(HTMX.children(node))
+    thead, tbody = HTMX.children(table)
+    headers = HTMX.children(only(HTMX.children(thead)))
+    cells = HTMX.children(only(HTMX.children(tbody)))
+
+    @test HTMX.attrs(table)[:class] == "htmxo-sortable-table"
+    @test length(headers) == 3
+    @test HTMX.attrs(headers[2])[:colspan] == "2"
+    @test !haskey(HTMX.attrs(headers[2]), :onclick)
+    @test !haskey(HTMX.attrs(headers[2]), :class)
+    @test occursin("sortTable(0,this)", HTMX.attrs(headers[1])[:onclick])
+    @test occursin("sortTable(3,this)", HTMX.attrs(headers[3])[:onclick])
+    @test length(cells) == 3
+    @test HTMX.attrs(cells[2])[:colspan] == "2"
+end
+
+"""
+A full-width body row is paired with its preceding primary row using matching
+`row-` / `detail-` identifiers, and its sole cell spans the table.
+"""
+@testitem "md_to_node - master detail table rows" setup=[HTMXTestHelpers] tags=[:unit, :markdown, :parser, :tables] begin
+    node = md_to_node(
+        "| Name | Value | Status |\n" *
+        "|---|---:|:---:|\n" *
+        "| Alpha | 2 | Ready |\n" *
+        "| detail text |||",
+    )
+    table = only(HTMX.children(node))
+    tbody = HTMX.children(table)[2]
+    primary, detail = HTMX.children(tbody)
+    primary_id = HTMX.attrs(primary)[:id]
+    detail_id = HTMX.attrs(detail)[:id]
+    detail_cell = only(HTMX.children(detail))
+
+    @test startswith(primary_id, "row-")
+    @test detail_id == replace(primary_id, "row-" => "detail-"; count=1)
+    @test HTMX.attrs(detail_cell)[:colspan] == "3"
+    @test HTMX.children(detail_cell) == ["detail text"]
+end
+
+"""
+Semantic HTML blocks preserve their agent-readable Markdown conventions:
+figures use Quarto fences, details omit the summary toggle, and blockquotes
+prefix every line.
+"""
+@testitem "markdown - figure details and blockquote" setup=[HTMXTestHelpers] tags=[:unit, :markdown, :semantic] begin
+    figure = h.figure(id="fig-main")(
+        h.img(src="/a.png", alt="A"),
+        h.figcaption("Caption"),
+    )
+    @test to_md(figure) ==
+        "\n\n::: {#fig-main}\n![A](/a.png)\n\nCaption\n:::\n\n"
+
+    details = h.details(h.summary("Toggle"), h.p("Visible ", h.strong("content")))
+    @test to_md(details) == "Visible **content**\n\n"
+    @test !occursin("Toggle", to_md(details))
+
+    blockquote = h.blockquote(h.p("A ", h.strong("B")), h.p("C"))
+    @test to_md(blockquote) == "> A **B**\n> \n> C\n\n"
+end
+
+"""
+Inline and fenced Markdown code is escaped exactly once before becoming HTML,
+covering ampersands, quotes, apostrophes, and angle brackets.
+"""
+@testitem "md_to_node - code escaping" setup=[HTMXTestHelpers] tags=[:unit, :markdown, :parser, :escaping] begin
+    payload = "<x attr=\"v\"> & 'quoted'"
+    escaped = "&lt;x attr=&quot;v&quot;&gt; &amp; &#39;quoted&#39;"
+
+    @test html(md_to_node("`$payload`")) ==
+        "<div><p><code>$escaped</code></p></div>"
+    @test html(md_to_node("```html\n$payload\n```")) ==
+        "<div><pre><code>$escaped</code></pre></div>"
+end
+
+"""
 `header` renders as a level-3 heading and `title` as a level-1 heading, both
 keeping inline formatting.
 """
