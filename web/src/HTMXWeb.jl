@@ -2,7 +2,6 @@ module HTMXWeb
 
 using HTMXObjects
 using HTMX
-using TestModules
 
 # Load Treebars before importing RecordingRoutes — Treebars activates
 # HTMXObjects's HTMXObjectsTreebarsExt, which injects `RecordingRoutes`
@@ -10,8 +9,6 @@ using TestModules
 # blocks on the request until done.
 using Treebars
 using HTMXObjects: RecordingRoutes
-
-include("test/runtests.jl")
 
 pkg_dir(kind::Symbol) = joinpath(dirname(dirname(@__DIR__)), String(kind))
 list_jl(kind::Symbol) = filter(f -> endswith(f, ".jl"), readdir(pkg_dir(kind)))
@@ -134,7 +131,7 @@ htmx_card(item::GalleryItem; spec) = h.article(
 
     @include structure = HTMXObjects.StructureRoutes(; root=AppContext)
 
-    @include tests = TestRoutes(; __req__, test_module=@__MODULE__)
+    @include tests = TestRoutes(; project=pkgdir(HTMX))
 end
 
 function __init__()
