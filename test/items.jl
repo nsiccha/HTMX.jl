@@ -50,6 +50,39 @@ Nodes passed as children nest as child elements in the rendered HTML.
     @test html(node) == "<div><p>inner</p></div>"
 end
 
+"""
+Ordinary text children and attribute values escape HTML metacharacters exactly
+once, while nested and otherwise self-rendering HTML children stay structural.
+"""
+@testitem "HTML escaping defaults" setup=[HTMXTestHelpers] tags=[:unit, :nodes, :attributes, :escaping] begin
+    payload = "<&\"'>&"
+    escaped = "&lt;&amp;&quot;&#39;&gt;&amp;"
+
+    @test html(h.div(title=payload)(payload)) ==
+        "<div title=\"$escaped\">$escaped</div>"
+    @test html(h.div(h.span(payload))) ==
+        "<div><span>$escaped</span></div>"
+    @test html(h.div(Base.HTML("<em>trusted & structural</em>"))) ==
+        "<div><em>trusted & structural</em></div>"
+end
+
+"""
+`Raw` is the explicit child-only opt-out for complete trusted markup and
+script/style bodies. Without it, even raw-text element children are escaped.
+"""
+@testitem "Raw HTML opt-out" setup=[HTMXTestHelpers] tags=[:unit, :nodes, :escaping, :raw] begin
+    markup = "<em data-x=\"a&b\">trusted</em>"
+    program = "if (a < b && c > d) console.log(\"ok\")"
+
+    @test String(Raw(markup)) == markup
+    @test html(h.div(Raw(markup))) == "<div>$markup</div>"
+    @test html(h.script(Raw(program))) == "<script>$program</script>"
+    @test html(h.script(program)) ==
+        "<script>if (a &lt; b &amp;&amp; c &gt; d) console.log(&quot;ok&quot;)</script>"
+    @test html(h.div(data_value=Raw("<b>&"))) ==
+        "<div data-value=\"&lt;b&gt;&amp;\"></div>"
+end
+
 # ================================================================
 # Call syntax
 # ================================================================
@@ -181,7 +214,7 @@ than as text content.
     node = h.div(hs)
     rendered = html(node)
     @test occursin("_=", rendered)
-    @test occursin("on click log 'hi'", rendered)
+    @test occursin("on click log &#39;hi&#39;", rendered)
 end
 
 """
@@ -205,8 +238,8 @@ Multiple `HyperscriptString` children concatenate into a single `_` attribute.
     hs2 = HTMX.HyperscriptString("on load log 'b'")
     node = h.div(hs1, hs2)
     rendered = html(node)
-    @test occursin("on click log 'a'", rendered)
-    @test occursin("on load log 'b'", rendered)
+    @test occursin("on click log &#39;a&#39;", rendered)
+    @test occursin("on load log &#39;b&#39;", rendered)
 end
 
 """

@@ -7,6 +7,7 @@ and renders it to HTML and Markdown.
 # Exports
 - [`h`](@ref) — tag-based HTML node builder (`h.div(...)`, `h.p("text")`)
 - [`Node`](@ref) — immutable HTML node (`tag` / `attrs` / `children`)
+- [`Raw`](@ref) — explicit wrapper for complete, trusted HTML/JS/CSS bytes
 - [`auto`](@ref) — convert arbitrary values to HTML response strings
 - [`@__str`](@ref) — string literal macro for [`HyperscriptString`](@ref)
 - [`md_to_node`](@ref) — Markdown string/AST → `h.*` nodes
@@ -15,7 +16,7 @@ module HTMX
 
 import Markdown
 using OrderedCollections: OrderedDict
-export auto, h, Node, @__str, md_to_node
+export auto, h, Node, Raw, @__str, md_to_node
 
 """
     auto(x; wrap)
@@ -130,6 +131,33 @@ function escape(x::AbstractString)
 end
 
 """
+    Raw(html::AbstractString)
+
+Mark complete, trusted HTML/JS/CSS bytes for verbatim emission when used as an
+HTML [`Node`](@ref) child. Ordinary strings are escaped by default; use `Raw`
+only when the value is entirely server-owned and is already valid for its HTML
+context.
+
+`Raw` does not disable attribute-value escaping. It is not a substitute for
+context-aware escaping of untrusted values interpolated into HTML, JavaScript,
+or CSS.
+
+# Example
+```julia
+h.div(Raw("<em>trusted markup</em>"))
+h.script(Raw("console.log('trusted program')"))
+```
+"""
+struct Raw
+    html::String
+end
+
+Raw(html::AbstractString) = Raw(String(html))
+Base.String(raw::Raw) = raw.html
+Base.print(io::IO, raw::Raw) = print(io, raw.html)
+Base.show(io::IO, ::MIME"text/html", raw::Raw) = print(io, raw.html)
+
+"""
     Node(tag, children...; attributes...)
 
 Immutable HTML node. Keyword arguments become HTML attributes (underscores are
@@ -144,6 +172,10 @@ Use call syntax to append children or merge attributes:
 
 During HTML rendering, [`HyperscriptString`](@ref) children are moved to the `_`
 attribute (for [hyperscript](https://hyperscript.org/)).
+
+Ordinary child text and attribute values are HTML-escaped. Children that define
+their own `show(::MIME"text/html", ...)` method render structurally; wrap only
+complete, trusted literal markup or program text in [`Raw`](@ref).
 
 The fields are read with [`tag`](@ref), [`attrs`](@ref) and [`children`](@ref).
 """
@@ -195,11 +227,11 @@ function Base.show(io::IO, m::MIME"text/html", n::Node)
         # Omit string-valued "false" ONLY for true boolean attributes; for
         # enumerated/ARIA attributes "false" is meaningful and must render.
         v == "false" && k in _BOOLEAN_ATTRS && continue
-        print(io, ' ', k, '=', '"', v, '"')
+        print(io, ' ', k, '=', '"', escape(string(v)), '"')
     end
     print(io, '>')
     for child in kids
-        showable("text/html", child) ? show(io, m, child) : print(io, child)
+        showable("text/html", child) ? show(io, m, child) : print(io, escape(string(child)))
     end
     tag(n) in VOID_ELEMENTS || print(io, "</", tag(n), '>')
 end
@@ -453,7 +485,7 @@ _md_to_node(md::Markdown.MD) = h.div(_md_to_node.(md.content)...)
 _md_to_node(p::Markdown.Paragraph) = h.p(_md_to_node.(p.content)...)
 _md_to_node(b::Markdown.Bold) = h.strong(_md_to_node.(b.text)...)
 _md_to_node(i::Markdown.Italic) = h.em(_md_to_node.(i.text)...)
-_md_to_node(c::Markdown.Code) = c.language == "" ? h.code(escape(c.code)) : h.pre(h.code(escape(c.code)))
+_md_to_node(c::Markdown.Code) = c.language == "" ? h.code(c.code) : h.pre(h.code(c.code))
 _md_to_node(l::Markdown.Link) = h.a(href=l.url)(_md_to_node.(l.text)...)
 _md_to_node(hdr::Markdown.Header{1}) = h.h1(_md_to_node.(hdr.text)...)
 _md_to_node(hdr::Markdown.Header{2}) = h.h2(_md_to_node.(hdr.text)...)
