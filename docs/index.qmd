@@ -2,7 +2,7 @@
 title: "HTMX.jl"
 ---
 
-`HTMX.jl` provides a Julia interface for building [HTMX](https://htmx.org)-powered HTML using a hyperscript-like syntax backed by [Cobweb.jl](https://github.com/JuliaWeb/Cobweb.jl).
+`HTMX.jl` provides a Julia interface for building [HTMX](https://htmx.org)-powered HTML with an owned node primitive. Node text and attribute values are escaped by default; `Raw(...)` is the explicit opt-out for complete trusted markup or program bytes.
 
 ```{julia}
 #| code-fold: true

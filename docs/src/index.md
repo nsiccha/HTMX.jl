@@ -1,19 +1,20 @@
 # HTMX.jl
 
-A small, focused Julia package for building HTML — designed for [HTMX](https://htmx.org)- and [Hyperscript](https://hyperscript.org)-powered apps. It is a thin layer on top of [Cobweb.jl](https://github.com/JuliaWeb/Cobweb.jl) that adds:
+A small, focused Julia package for building HTML — designed for [HTMX](https://htmx.org)- and [Hyperscript](https://hyperscript.org)-powered apps. It owns a compact immutable HTML node primitive and provides:
 
 - a tag-based builder (`h.div(...)`, `h.button(...)`, …)
-- ergonomic attribute syntax: `hx_get` → `hx-get`, `nothing`/`false` omitted, `true` as a bare attribute
+- ergonomic attribute syntax: `hx_get` → `hx-get`, `nothing`/`false` omitted, `true` as `"true"`
+- escape-by-default text children and attribute values, with explicit `Raw(...)` for complete trusted markup or program bytes
 - HTMX [out-of-band swap](https://htmx.org/attributes/hx-swap-oob/) helpers via [`auto`](#converting-arbitrary-julia-values-to-html), including the table-element `<template>` workaround
 - `_"…"` literals for embedding Hyperscript snippets into the `_` attribute
 - two-way HTML ↔ Markdown conversion (`show(io, MIME"text/markdown"(), node)` and [`md_to_node`](#building-html-from-markdown))
 
-The package surface is intentionally tiny — five exports and one MIME hook. If you want app scaffolding (routes, OOB helpers, app-level state), see [HTMXObjects.jl](https://github.com/nsiccha/HTMXObjects.jl), which builds on top.
+The package surface is intentionally tiny — six exports and two MIME renderers. If you want app scaffolding (routes, OOB helpers, app-level state), see [HTMXObjects.jl](https://github.com/nsiccha/HTMXObjects.jl), which builds on top.
 
 ## Cheat sheet
 
 ```julia
-using HTMX                                            # exports h, Node, auto, @__str, md_to_node
+using HTMX                                            # exports h, Node, Raw, auto, @__str, md_to_node
 
 h.div(class="card")(h.h1("Hello"), h.p("world"))      # build nodes
 h.button(hx_get="/click", hx_target="#out")("Go")     # HTMX attributes (underscore→hyphen)
@@ -49,7 +50,7 @@ julia> h.div(class="container")(h.h1("Hello"), h.p("world"))
 | `attr=nothing`| omitted                       |
 | `attr=false`  | omitted                       |
 | `attr=true`   | `attr="true"` (browsers treat as truthy) |
-| `attr=v`      | `attr="$(string(v))"`         |
+| `attr=v`      | HTML-escaped `string(v)`           |
 
 ```julia
 julia> h.input(type="checkbox", checked=true, disabled=false, value=42)
@@ -78,18 +79,48 @@ withbody = base(h.p("body"))            # new: <div class="card"><p>body</p></di
 themed   = base(class="card dark")      # new: <div class="card dark"></div>
 ```
 
+### Escaping and trusted raw content
+
+Ordinary text children and attribute values escape `&`, `"`, `'`, `<`, and `>`
+when the node renders. Pass data directly; pre-escaping it would produce visible
+entity text:
+
+```julia
+h.p("<b>A&B</b>")
+# <p>&lt;b&gt;A&amp;B&lt;/b&gt;</p>
+
+h.div(title="A & \"B\"")
+# <div title="A &amp; &quot;B&quot;"></div>
+```
+
+Nested `Node`s and other values with their own `text/html` renderer remain
+structural HTML. For complete server-owned markup, JavaScript, or CSS bytes,
+use the exported `Raw` wrapper explicitly:
+
+```julia
+h.div(Raw("<em>trusted markup</em>"))
+# <div><em>trusted markup</em></div>
+
+h.script(Raw("if (a < b && ready) start()"))
+# <script>if (a < b && ready) start()</script>
+```
+
+`Raw` is a trust assertion, not a sanitizer or a JavaScript/CSS-context
+escaper. Never interpolate untrusted values into its payload. It only opts out
+for node children; attribute values are always escaped.
+
 ### Void elements
 
 Void HTML elements (`<input>`, `<br>`, `<img>`, `<meta>`, `<link>`, …) are rendered without a closing tag automatically.
 
 ## The `Node` type
 
-`Node` is an immutable wrapper around a `Cobweb.Node`. Useful properties:
+`Node` is HTMX.jl's immutable `tag` / `attrs` / `children` primitive. Useful properties:
 
 - **Renderable** as `text/html` — `show(io, MIME"text/html"(), n)` produces a string ready to send to the browser. Web frameworks like HTMXObjects.jl/Oxygen call this when serializing responses.
 - **Renderable** as `text/markdown` — see [Markdown rendering](#rendering-html-as-markdown).
 - **Callable** — `n(more_children...; more_attrs...)` returns a *new* node with the children appended and the attributes merged.
-- **Inspectable** — `parent(n)` returns the underlying `Cobweb.Node` if you ever need to drop down to Cobweb's API directly.
+- **Inspectable** — `HTMX.tag(n)`, `HTMX.attrs(n)`, and `HTMX.children(n)` expose its plain data fields.
 
 ## Embedding Hyperscript with `_"…"`
 
@@ -117,6 +148,10 @@ auto(x; wrap)
 ```
 
 Convert `x` to an HTML string and apply `wrap` to the result. The `wrap` keyword is mandatory — use `wrap = string` (or `wrap = identity`) when calling directly; web frameworks built on top of HTMX.jl typically inject their own wrapper for things like flash messages or layout.
+
+The `AbstractString` overload is an intentional direct-response pass-through; it
+does not create a `Node` and therefore does not escape. Use `h.*` when rendering
+data as HTML text.
 
 | Input                 | Behaviour                                                                  |
 |-----------------------|----------------------------------------------------------------------------|
@@ -285,7 +320,6 @@ page = h.html(
 ## See also
 
 - [API Reference](api) — auto-generated from docstrings
-- [Cobweb.jl](https://github.com/JuliaWeb/Cobweb.jl) — the underlying HTML node library
 - [HTMXObjects.jl](https://github.com/nsiccha/HTMXObjects.jl) — Oxygen + HTMX app scaffolding built on top of HTMX.jl
 - [HTMX](https://htmx.org/) — the HTMX project
 - [Hyperscript](https://hyperscript.org/) — the `_` attribute scripting language

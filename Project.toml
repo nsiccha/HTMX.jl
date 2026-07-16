@@ -1,7 +1,7 @@
 name = "HTMX"
 uuid = "27f3e1ef-6ef8-44dc-9e9a-2fb23ed44e83"
 authors = ["Nikolas Siccha <nikolassiccha@gmail.com>"]
-version = "0.1.0"
+version = "1.0.0"
 
 [deps]
 Markdown = "d6f4376e-aef5-505a-96c1-9c027394607a"
