@@ -319,7 +319,7 @@ page = h.html(
 
 ## See also
 
-- [API Reference](api) — auto-generated from docstrings
+- [API Reference](api.md) — auto-generated from docstrings
 - [HTMXObjects.jl](https://github.com/nsiccha/HTMXObjects.jl) — Oxygen + HTMX app scaffolding built on top of HTMX.jl
 - [HTMX](https://htmx.org/) — the HTMX project
 - [Hyperscript](https://hyperscript.org/) — the `_` attribute scripting language
