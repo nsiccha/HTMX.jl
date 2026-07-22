@@ -188,8 +188,28 @@ struct Node
 end
 
 # Field accessors (the public read surface; `n.attrs[k]` etc. also work).
+
+"""
+    tag(n::Node) -> Symbol
+
+The element name of `n`, e.g. `:div` for `h.div(...)`.
+"""
 tag(n::Node)      = getfield(n, :tag)
+
+"""
+    attrs(n::Node) -> OrderedDict{Symbol,Any}
+
+The attributes of `n`, in insertion order, with hyphenated keys (`:var"data-id"`).
+The returned dictionary is the node's own field — copy it before mutating.
+"""
 attrs(n::Node)    = getfield(n, :attrs)
+
+"""
+    children(n::Node) -> Vector{Any}
+
+The children of `n`, in document order. The returned vector is the node's own
+field — copy it before mutating.
+"""
 children(n::Node) = getfield(n, :children)
 
 # Normalizing 3-arg form: accepts any tag / dict / iterable of children and
