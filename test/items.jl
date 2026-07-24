@@ -7,6 +7,30 @@ using TestItemRunner
     # Render a `Node` to its HTML / Markdown string form.
     html(node) = repr("text/html", node)
     to_md(node) = repr("text/markdown", node)
+    hxml(node) = repr("application/vnd.hyperview+xml", node)
+
+    # Minimal dependency-free XML well-formedness check: start tags are
+    # balanced and properly nested.
+    function well_formed_xml(s)
+        stack = String[]
+        i = firstindex(s)
+        while true
+            lt = findnext('<', s, i)
+            lt === nothing && break
+            gt = findnext('>', s, lt)
+            gt === nothing && return false
+            body = strip(s[nextind(s, lt):prevind(s, gt)])
+            if startswith(body, '/')
+                isempty(stack) && return false
+                pop!(stack) == strip(body[nextind(body, firstindex(body)):end]) ||
+                    return false
+            elseif !endswith(body, '/')
+                push!(stack, String(first(split(body))))
+            end
+            i = nextind(s, gt)
+        end
+        isempty(stack)
+    end
 end
 
 # ================================================================
@@ -505,4 +529,179 @@ keeping inline formatting.
 @testitem "markdown - header and title" setup=[HTMXTestHelpers] tags=[:unit, :markdown] begin
     @test to_md(h.header("Section")) == "### Section\n"
     @test to_md(h.title("Page ", h.code("Title"))) == "# Page `Title`\n"
+end
+
+# ================================================================
+# HXML (Hyperview) rendering
+# ================================================================
+
+"""
+`navigator` and `nav-route` preserve the native Hyperview container shape,
+including the default stack type, self-closing routes, and escaped URLs.
+"""
+@testitem "hxml - navigator and nav-route containers" setup=[HTMXTestHelpers] tags=[:unit, :hxml, :navigation] begin
+    @test hxml(h.navigator(
+        h.var"nav-route"(href="/hxml", id="home");
+        id="root",
+        type="stack",
+    )) ==
+        "<navigator id=\"root\" type=\"stack\"><nav-route id=\"home\" href=\"/hxml\" /></navigator>"
+    @test hxml(h.var"nav-route"()) == "<nav-route />"
+    @test hxml(h.navigator(; id="x")) ==
+        "<navigator id=\"x\" type=\"stack\"></navigator>"
+    @test hxml(h.navigator(
+        h.var"nav-route"(href="/a", id="a"),
+        h.var"nav-route"(href="/b", id="b");
+        id="t",
+        type="tab",
+    )) ==
+        "<navigator id=\"t\" type=\"tab\"><nav-route id=\"a\" href=\"/a\" /><nav-route id=\"b\" href=\"/b\" /></navigator>"
+    @test hxml(h.var"nav-route"(href="/x?a=1&b=2")) ==
+        "<nav-route href=\"/x?a=1&amp;b=2\" />"
+end
+
+"""
+Explicit Hyperview behavior nodes cover the full action surface, and implicit
+anchor navigation uses the same behavior emitter.
+"""
+@testitem "hxml - explicit behavior actions" setup=[HTMXTestHelpers] tags=[:unit, :hxml, :navigation] begin
+    @test hxml(h.behavior(action="push", trigger="press", href="/x")) ==
+        "<behavior trigger=\"press\" action=\"push\" href=\"/x\" />"
+    @test hxml(h.behavior(action="back")) ==
+        "<behavior trigger=\"press\" action=\"back\" />"
+    @test hxml(h.behavior(action="navigate", href="/y", target="main")) ==
+        "<behavior trigger=\"press\" action=\"navigate\" href=\"/y\" target=\"main\" />"
+    @test hxml(h.behavior(
+        action="replace-inner",
+        trigger="load",
+        href="/z",
+        delay="500",
+    )) ==
+        "<behavior trigger=\"load\" action=\"replace-inner\" href=\"/z\" delay=\"500\" />"
+    @test hxml(h.behavior(action="new", href="/modal", verb="POST")) ==
+        "<behavior trigger=\"press\" action=\"new\" href=\"/modal\" verb=\"POST\" />"
+    @test hxml(h.a("Home", href="/home")) ==
+        "<text style=\"a\"><behavior trigger=\"press\" action=\"push\" href=\"/home\" />Home</text>"
+end
+
+"""
+Representative navigation, behavior, link, and table output is balanced XML;
+the local checker also rejects a mismatched closing tag.
+"""
+@testitem "hxml - emission is well formed" setup=[HTMXTestHelpers] tags=[:unit, :hxml, :xml] begin
+    @test well_formed_xml(hxml(h.navigator(
+        h.var"nav-route"(href="/hxml", id="home");
+        id="root",
+        type="stack",
+    )))
+    @test well_formed_xml(hxml(h.behavior(action="back")))
+    @test well_formed_xml(hxml(h.a("Home", href="/home")))
+    @test well_formed_xml(hxml(h.table(h.tr(h.th("A"), h.td("1")))))
+    @test !well_formed_xml("<navigator><nav-route /></wrong>")
+end
+
+"""
+The vendor HXML MIME is registered as text, so `repr` returns the same
+String-shaped result callers receive for HTML and Markdown.
+"""
+@testitem "hxml - repr returns a String" setup=[HTMXTestHelpers] tags=[:unit, :hxml, :mime] begin
+    rendered = repr("application/vnd.hyperview+xml", h.div())
+    @test rendered isa String
+    @test rendered == "<view style=\"div\"></view>"
+end
+
+"""
+HTMX emits a body fragment whose tag-first style ids and behaviors compose
+into the consumer-owned `doc/screen/styles/body` envelope.
+"""
+@testitem "hxml - end-to-end consumer screen" setup=[HTMXTestHelpers] tags=[:integration, :hxml, :consumer] begin
+    fragment = hxml(h.div(class="card")(
+        h.h2("Invoice"),
+        h.p(h.small("due "), h.code("2026-07-31")),
+        h.ul(h.li(h.a("Open", href="/inv/1"))),
+        h.button("Refresh"; hx_get="/inv/1/rows", hx_target="#content"),
+    ))
+
+    @test occursin("<view style=\"div card\">", fragment)
+    @test occursin("<text style=\"h2\">Invoice</text>", fragment)
+    @test occursin("<text style=\"small\">", fragment)
+    @test occursin(
+        "<behavior trigger=\"press\" action=\"push\" href=\"/inv/1\" />",
+        fragment,
+    )
+    @test occursin(
+        "action=\"replace-inner\" href=\"/inv/1/rows\" target=\"content\"",
+        fragment,
+    )
+
+    dropped = hxml(h.div(style="color:red")("x"))
+    @test !occursin("color:red", dropped)
+    @test occursin("<view style=\"div\">", dropped)
+
+    styles = "<styles>" *
+        "<style id=\"div\" flexDirection=\"column\" />" *
+        "<style id=\"card\" padding=\"16\" />" *
+        "<style id=\"h2\" fontSize=\"20\" />" *
+        "<style id=\"small\" color=\"gray\" />" *
+        "<style id=\"code\" fontFamily=\"monospace\" />" *
+        "<style id=\"ul\" /><style id=\"li\" />" *
+        "<style id=\"a\" color=\"blue\" /><style id=\"button\" />" *
+        "</styles>"
+    doc = "<doc><screen>" * styles * "<body>" * fragment * "</body></screen></doc>"
+    @test well_formed_xml(doc)
+end
+
+"""
+HTML form inputs map to native Hyperview fields, including the required ISO
+date label format, min/max bounds, keyboard hints, and secure passwords.
+"""
+@testitem "hxml - native form fields" setup=[HTMXTestHelpers] tags=[:unit, :hxml, :forms] begin
+    @test hxml(h.input(type="date", name="due", value="2026-07-31")) ==
+        "<date-field style=\"date-field\" name=\"due\" value=\"2026-07-31\" label-format=\"YYYY-MM-DD\" />"
+    @test hxml(h.input(
+        type="date",
+        name="d",
+        min="2026-01-01",
+        max="2026-12-31",
+    )) ==
+        "<date-field style=\"date-field\" name=\"d\" label-format=\"YYYY-MM-DD\" min=\"2026-01-01\" max=\"2026-12-31\" />"
+    @test hxml(h.input(type="email", name="e")) ==
+        "<text-field style=\"text-field\" name=\"e\" keyboard-type=\"email-address\" />"
+    @test hxml(h.input(type="number", name="n")) ==
+        "<text-field style=\"text-field\" name=\"n\" keyboard-type=\"decimal-pad\" />"
+    @test hxml(h.input(type="tel", name="p")) ==
+        "<text-field style=\"text-field\" name=\"p\" keyboard-type=\"phone-pad\" />"
+    @test hxml(h.input(type="url", name="u")) ==
+        "<text-field style=\"text-field\" name=\"u\" keyboard-type=\"url\" />"
+    @test hxml(h.input(type="password", name="pw")) ==
+        "<text-field style=\"text-field\" name=\"pw\" secure-text=\"true\" />"
+    @test hxml(h.input(type="text", name="q")) ==
+        "<text-field style=\"text-field\" name=\"q\" />"
+    @test hxml(h.input(type="checkbox", name="ok")) ==
+        "<switch style=\"switch\" name=\"ok\" />"
+    @test well_formed_xml(hxml(h.input(type="date", name="due", value="2026-07-31")))
+end
+
+"""
+A view groups only bare inline text. Children that emit their own Hyperview
+`text` elements remain direct siblings so flex layouts can distribute them.
+"""
+@testitem "hxml - views preserve self-text inline siblings" setup=[HTMXTestHelpers] tags=[:unit, :hxml, :layout] begin
+    @test hxml(h.div(class="kv")(
+        h.span(class="kv-label")("k"),
+        h.span(class="kv-value")("v"),
+    )) ==
+        "<view style=\"div kv\"><text style=\"span kv-label\">k</text><text style=\"span kv-value\">v</text></view>"
+    @test hxml(h.div(h.span("T"))) ==
+        "<view style=\"div\"><text style=\"span\">T</text></view>"
+    @test hxml(h.div("hello")) ==
+        "<view style=\"div\"><text>hello</text></view>"
+    @test hxml(h.div(h.time("2pm"), h.time("3pm"))) ==
+        "<view style=\"div\"><text>2pm3pm</text></view>"
+    @test hxml(h.p("Hello ", h.strong("world"), "!")) ==
+        "<text style=\"p\">Hello <text style=\"strong\">world</text>!</text>"
+    @test well_formed_xml(hxml(h.div(class="kv")(
+        h.span(class="kv-label")("k"),
+        h.span(class="kv-value")("v"),
+    )))
 end
