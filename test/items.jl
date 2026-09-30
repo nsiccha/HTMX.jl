@@ -398,6 +398,30 @@ for the fence info string, without the inline-`code` backtick handler firing.
 end
 
 """
+A `pre` block whose verbatim body itself contains a fenced code block must use
+an outer fence longer than any backtick run inside (CommonMark rule), so the
+body survives as one code block instead of closing early with a stray fence.
+"""
+@testitem "markdown - pre lengthens fence around inner fenced block" setup=[HTMXTestHelpers] tags=[:unit, :markdown] begin
+    body = "intro line\n```julia\nx = 1\n```\ntrailing line"
+    out = to_md(h.pre(h.code(body)))
+    lines = split(out, '\n')
+    @test lines[1] == "````"
+    @test lines[end-1] == "````"
+    @test count(==("````"), lines) == 2
+    @test "```julia" in lines
+    @test "```" in lines
+
+    # The language info string rides the lengthened fence.
+    out_lang = to_md(h.pre(h.code(class="language-julia", body)))
+    @test split(out_lang, '\n')[1] == "````julia"
+
+    # Longer inner runs push the fence further: N+1 backticks where N is longest.
+    out2 = to_md(h.pre(h.code("a\n````\nb\n````\nc")))
+    @test split(out2, '\n')[1] == "`````"
+end
+
+"""
 Table cells preserve inline Markdown formatting when a parsed table node is
 rendered back to Markdown.
 """

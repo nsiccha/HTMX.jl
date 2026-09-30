@@ -373,6 +373,17 @@ end
 # Block leaves
 _md(io, m, node::Node, ::Val{:p})     = (_md_recurse(io, m, node); println(io); println(io))
 _md(io, m, node::Node, ::Val{:li})    = (print(io, "- "); _md_recurse(io, m, node); println(io))
+# Fence for a <pre> block: CommonMark requires the opening/closing fence to be
+# longer than any backtick run inside, so a body containing its own fenced
+# block survives as one code block instead of closing the outer fence early.
+function _md_fence(text)
+    longest = 0
+    for mt in eachmatch(r"`+", text)
+        longest = max(longest, length(mt.match))
+    end
+    repeat("`", max(3, longest + 1))
+end
+
 function _md(io, m, node::Node, ::Val{:pre})
     lang = ""
     code_node = nothing
@@ -385,10 +396,14 @@ function _md(io, m, node::Node, ::Val{:pre})
             break
         end
     end
-    println(io, "```", lang)
-    _md_recurse(io, m, isnothing(code_node) ? node : code_node)
+    buf = IOBuffer()
+    _md_recurse(buf, m, isnothing(code_node) ? node : code_node)
+    body = String(take!(buf))
+    fence = _md_fence(body)
+    println(io, fence, lang)
+    print(io, body)
     println(io)
-    println(io, "```")
+    println(io, fence)
 end
 _md(io, m, node::Node, ::Val{:hr})    = println(io, "---")
 _md(io, m, node::Node, ::Val{:table}) = _table_to_markdown(io, node)
