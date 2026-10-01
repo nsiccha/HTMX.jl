@@ -77,9 +77,18 @@ Create a [`HyperscriptString`](@ref) literal. Equivalent to `HyperscriptString("
 macro __str(ex)
     :($HyperscriptString($(esc(Meta.parse("\"$ex\"")))))
 end
-_as_flat(a::AbstractVector) = a
-_as_flat(a) = [a]
-_flatten(args) = mapreduce(_as_flat, vcat, args; init=Any[])
+_push_flat!(out, a::AbstractVector) = append!(out, a)
+_push_flat!(out, a) = push!(out, a)
+# Flatten one level of positional children in linear time: a vector argument
+# splices its elements in order, anything else becomes one child. (Folding
+# `vcat` across the arguments instead is quadratic in the child count.)
+function _flatten(args)
+    out = Any[]
+    for a in args
+        _push_flat!(out, a)
+    end
+    out
+end
 
 # filter! predicate: keep non-HyperscriptString children; absorb HyperscriptStrings into the `_` attr
 _absorb_hyperscript!(attrs, tag::HyperscriptString) =
@@ -163,7 +172,9 @@ Base.show(io::IO, ::MIME"text/html", raw::Raw) = print(io, raw.html)
 Immutable HTML node. Keyword arguments become HTML attributes (underscores are
 converted to hyphens, e.g. `hx_get` → `hx-get`). Attributes set to `nothing` or
 `false` are omitted; `true` renders as `name="true"` (browsers treat the quoted
-value as truthy). Positional arguments become children.
+value as truthy). Positional arguments become children. An `AbstractVector`
+argument is flattened one level: its elements become children in order, so a
+long child list can be passed as one vector instead of splatted.
 
 Use call syntax to append children or merge attributes:
 
@@ -284,8 +295,10 @@ standard way to build elements:
     )
 
 Keyword arguments become attributes (underscores → hyphens). Positional arguments
-become children. Attributes set to `nothing` or `false` are omitted; `true` renders
-as `name="true"` (browsers treat the quoted value as truthy).
+become children. An `AbstractVector` argument is flattened one level: its
+elements become children in order, so a long child list can be passed as one
+vector instead of splatted. Attributes set to `nothing` or `false` are omitted;
+`true` renders as `name="true"` (browsers treat the quoted value as truthy).
 """
 h(tag, args...; kwargs...) = Node(tag, args...; kwargs...)
 Base.getproperty(::typeof(h), tag::Symbol) = (args...; kwargs...)->h(tag, args...; kwargs...)
