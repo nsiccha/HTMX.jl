@@ -133,6 +133,38 @@ Calling a node with keyword arguments merges them into the node's attributes.
     @test occursin("id=\"b\"", html(node2))
 end
 
+"""
+A vector positional child is flattened one level into the child list, in both
+the builder and the call form — so a long child list can be passed as one
+vector instead of splatted, holding the same children and rendering
+byte-identical HTML.
+"""
+@testitem "Vector children are flattened" setup=[HTMXTestHelpers] tags=[:unit, :nodes] begin
+    kids = Any[h.div(class="x")("item $k") for k in 1:10]
+    @test HTMX.children(h.div(class="c")(kids)) == kids
+    @test HTMX.children(h.div(kids; class="c")) == kids
+    @test html(h.div(class="c")(kids...)) == html(h.div(class="c")(kids))
+    # mixed scalar + vector, empty vector, "" entries, escaped text
+    m1 = h.div("a", ["b", "c"], "", "<&>", Any[])
+    m2 = h.div("a", "b", "c", "", "<&>")
+    @test HTMX.children(m1) == HTMX.children(m2)
+    @test html(m1) == html(m2)
+end
+
+"""
+Varargs child collection is linear in the child count: doubling the children
+roughly doubles allocation instead of quadrupling it (folding `vcat` across
+the arguments is quadratic).
+"""
+@testitem "varargs children scale linearly" setup=[HTMXTestHelpers] tags=[:unit, :nodes] begin
+    small = Any[h.div("item $k") for k in 1:1000]
+    large = Any[h.div("item $k") for k in 1:2000]
+    h.div()(small...)  # warmup
+    a_small = @allocated h.div()(small...)
+    a_large = @allocated h.div()(large...)
+    @test a_large < 3 * a_small
+end
+
 # ================================================================
 # Attribute handling
 # ================================================================
