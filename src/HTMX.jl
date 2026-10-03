@@ -995,6 +995,10 @@ end
 
 Convert a markdown string or `Markdown.jl` AST into `h.*` HTML nodes.
 
+Inline math uses MathJax's `\\(...\\)` delimiters; display math (including
+fenced `math` blocks and standalone `Markdown.LaTeX` nodes) uses double-dollar
+delimiters. Formula text is HTML-escaped like other ordinary node children.
+
 # Example
 ```julia
 md_to_node("**bold** and `code`")
@@ -1006,19 +1010,24 @@ md_to_node(s::AbstractString) = _md_to_node(Markdown.parse(s))
 md_to_node(x) = _md_to_node(x)
 
 # Internal recursive converter — handles Markdown AST nodes and string leaves
+# Markdown.LaTeX carries no inline/block flag, so inline-content containers
+# select inline conversion while document/list/blockquote blocks keep display.
+_md_inline_to_node(x) = _md_to_node(x)
+_md_inline_to_node(l::Markdown.LaTeX) = "\\($(l.formula)\\)"
+
 _md_to_node(s::AbstractString) = s
 _md_to_node(md::Markdown.MD) = h.div(_md_to_node.(md.content)...)
-_md_to_node(p::Markdown.Paragraph) = h.p(_md_to_node.(p.content)...)
-_md_to_node(b::Markdown.Bold) = h.strong(_md_to_node.(b.text)...)
-_md_to_node(i::Markdown.Italic) = h.em(_md_to_node.(i.text)...)
+_md_to_node(p::Markdown.Paragraph) = h.p(_md_inline_to_node.(p.content)...)
+_md_to_node(b::Markdown.Bold) = h.strong(_md_inline_to_node.(b.text)...)
+_md_to_node(i::Markdown.Italic) = h.em(_md_inline_to_node.(i.text)...)
 _md_to_node(c::Markdown.Code) = c.language == "" ? h.code(c.code) : h.pre(h.code(c.code))
-_md_to_node(l::Markdown.Link) = h.a(href=l.url)(_md_to_node.(l.text)...)
-_md_to_node(hdr::Markdown.Header{1}) = h.h1(_md_to_node.(hdr.text)...)
-_md_to_node(hdr::Markdown.Header{2}) = h.h2(_md_to_node.(hdr.text)...)
-_md_to_node(hdr::Markdown.Header{3}) = h.h3(_md_to_node.(hdr.text)...)
-_md_to_node(hdr::Markdown.Header{4}) = h.h4(_md_to_node.(hdr.text)...)
-_md_to_node(hdr::Markdown.Header{5}) = h.h5(_md_to_node.(hdr.text)...)
-_md_to_node(hdr::Markdown.Header{6}) = h.h6(_md_to_node.(hdr.text)...)
+_md_to_node(l::Markdown.Link) = h.a(href=l.url)(_md_inline_to_node.(l.text)...)
+_md_to_node(hdr::Markdown.Header{1}) = h.h1(_md_inline_to_node.(hdr.text)...)
+_md_to_node(hdr::Markdown.Header{2}) = h.h2(_md_inline_to_node.(hdr.text)...)
+_md_to_node(hdr::Markdown.Header{3}) = h.h3(_md_inline_to_node.(hdr.text)...)
+_md_to_node(hdr::Markdown.Header{4}) = h.h4(_md_inline_to_node.(hdr.text)...)
+_md_to_node(hdr::Markdown.Header{5}) = h.h5(_md_inline_to_node.(hdr.text)...)
+_md_to_node(hdr::Markdown.Header{6}) = h.h6(_md_inline_to_node.(hdr.text)...)
 _md_to_node(bq::Markdown.BlockQuote) = h.blockquote(_md_to_node.(bq.content)...)
 _md_to_node(list::Markdown.List) = begin
     tag = list.ordered == -1 ? h.ul : h.ol
@@ -1031,7 +1040,7 @@ _li_for(item) = begin
     h.li(h.input(; type="checkbox", disabled=true,
                    checked = checked ? true : nothing),
          " ",
-         _md_to_node.(first_inline)...,
+         _md_inline_to_node.(first_inline)...,
          _md_to_node.(rest_blocks)...)
 end
 # GFM task-list detection: a list item whose first inline leaf starts with
@@ -1077,7 +1086,7 @@ _md_to_node(t::Markdown.Table) = begin
         out
     end
     th_cell(content, a, i, span) = begin
-        kids = _md_to_node.(content)
+        kids = _md_inline_to_node.(content)
         al = align_attr(a)
         # Only single-column headers are click-to-sort. Spanning headers
         # (group labels) opt out — HTMXObjects' CSS already sets
@@ -1089,7 +1098,7 @@ _md_to_node(t::Markdown.Table) = begin
         h.th(; align=(al == "" ? nothing : al), colspan, onclick, class=cls)(kids...)
     end
     td_cell(content, a, span) = begin
-        kids = _md_to_node.(content)
+        kids = _md_inline_to_node.(content)
         al = align_attr(a)
         colspan = span > 1 ? span : nothing
         h.td(; align=(al == "" ? nothing : al), colspan)(kids...)

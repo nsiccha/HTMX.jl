@@ -565,6 +565,62 @@ prefix every line.
 end
 
 """
+Markdown math keeps its inline or block context in paragraphs, formatting,
+headings, links, tables, list items, and blockquotes. A standalone LaTeX AST
+retains its display behavior.
+"""
+@testitem "md_to_node - inline and display math" setup=[HTMXTestHelpers] tags=[:unit, :markdown, :parser, :math] begin
+    import Markdown
+
+    source = "Inline \$x_i\$ stays inside prose.\n\n```math\nx_i=1\n```"
+    expected = raw"<div><p>Inline \(x_i\) stays inside prose.</p>$$x_i=1$$</div>"
+    @test html(md_to_node(source)) == expected
+    @test html(md_to_node(Markdown.parse(source))) == expected
+    @test html(md_to_node(raw"Inline ``x_i`` stays inside prose.")) ==
+        raw"<div><p>Inline \(x_i\) stays inside prose.</p></div>"
+    @test html(md_to_node(raw"*Inline $x_i$.*")) ==
+        raw"<div><p><em>Inline \(x_i\).</em></p></div>"
+    @test html(md_to_node(raw"**Inline $x_i$.**")) ==
+        raw"<div><p><strong>Inline \(x_i\).</strong></p></div>"
+    @test html(md_to_node(raw"**Outer *$x_i$* text**")) ==
+        raw"<div><p><strong>Outer <em>\(x_i\)</em> text</strong></p></div>"
+    @test html(md_to_node(raw"[$x_i$](https://example.com)")) ==
+        "<div><p><a href=\"https://example.com\">\\(x_i\\)</a></p></div>"
+    for level in 1:6
+        @test html(md_to_node(repeat("#", level) * raw" Header $x_i$")) ==
+            "<div><h$level>Header \\(x_i\\)</h$level></div>"
+    end
+    table = html(md_to_node("| \$a\$ | B |\n|---|---|\n| *\$x_i\$* | c |"))
+    @test occursin(raw">\(a\)</th>", table)
+    @test occursin(raw"><em>\(x_i\)</em></td>", table)
+    @test !occursin(raw"$$", table)
+    @test html(md_to_node(raw"- Inline $x_i$")) ==
+        raw"<div><ul><li><p>Inline \(x_i\)</p></li></ul></div>"
+    @test html(md_to_node(raw"- [ ] Inline $x_i$")) ==
+        "<div><ul><li><input type=\"checkbox\" disabled=\"true\"> Inline \\(x_i\\)</li></ul></div>"
+    @test html(md_to_node(raw"> Inline $x_i$")) ==
+        raw"<div><blockquote><p>Inline \(x_i\)</p></blockquote></div>"
+    @test html(md_to_node("> ```math\n> x_i=1\n> ```")) ==
+        raw"<div><blockquote>$$x_i=1$$</blockquote></div>"
+    @test html(md_to_node("- ```math\n  x_i=1\n  ```")) ==
+        raw"<div><ul><li>$$x_i=1$$</li></ul></div>"
+    @test md_to_node(Markdown.LaTeX("x_i=1")) == raw"$$x_i=1$$"
+end
+
+"""
+Inline and display formulas use ordinary text children, preserving exactly-once
+HTML escaping for ampersands, quotes, apostrophes, and angle brackets.
+"""
+@testitem "md_to_node - math escaping" setup=[HTMXTestHelpers] tags=[:unit, :markdown, :parser, :math, :escaping] begin
+    payload = "<x attr=\"v\"> & 'quoted'"
+    escaped = "&lt;x attr=&quot;v&quot;&gt; &amp; &#39;quoted&#39;"
+    @test html(md_to_node("Inline \$$payload\$ prose.")) ==
+        "<div><p>Inline \\($escaped\\) prose.</p></div>"
+    @test html(md_to_node("```math\n$payload\n```")) ==
+        "<div>\$\$$escaped\$\$</div>"
+end
+
+"""
 Inline and fenced Markdown code is escaped exactly once before becoming HTML,
 covering ampersands, quotes, apostrophes, and angle brackets.
 """
