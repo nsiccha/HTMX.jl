@@ -231,10 +231,11 @@ print(sprint(show, MIME"text/markdown"(), node))
 ## Today
 - first
 - second
+
 a paragraph
 ```
 
-The `---` divider before `<article>`/`<section>` is intentional: it gives a Markdown reader a clear seam between semantic blocks. Conversion table:
+The `---` divider before `<article>`/`<section>` is intentional: it gives a Markdown reader a clear seam between semantic blocks. Every block element starts on its own line: inline text before it inside a transparent container (`h.div("lead", h.h2("x"))`) is closed as a paragraph, and content after a list item starts after a blank line. Conversion table:
 
 | HTML tag                          | Markdown                  |
 |-----------------------------------|---------------------------|
@@ -248,7 +249,7 @@ The `---` divider before `<article>`/`<section>` is intentional: it gives a Mark
 | `a`                               | `[text](href)`            |
 | `strong`/`b`, `em`/`i`, `code`    | `**…**`, `*…*`, `` `…` `` |
 | `article`, `section`              | wrapped in `---` dividers |
-| `header`                          | rendered as `### `        |
+| `header`                          | `### ` when inline-only; its own blocks (heading, nav, …) unprefixed |
 | `title`                           | `# `                      |
 | `hr`                              | `---`                     |
 | `script`, `style`, `meta`, `link` | skipped                   |

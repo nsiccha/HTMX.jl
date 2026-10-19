@@ -635,12 +635,66 @@ covering ampersands, quotes, apostrophes, and angle brackets.
 end
 
 """
-`header` renders as a level-3 heading and `title` as a level-1 heading, both
-keeping inline formatting.
+An inline-only `header` renders as a level-3 heading and `title` as a level-1
+heading, both keeping inline formatting.
 """
 @testitem "markdown - header and title" setup=[HTMXTestHelpers] tags=[:unit, :markdown] begin
     @test to_md(h.header("Section")) == "### Section\n"
+    @test to_md(h.header(h.strong("Power"))) == "### **Power**\n"
     @test to_md(h.title("Page ", h.code("Title"))) == "# Page `Title`\n"
+end
+
+"""
+A `header` holding its own blocks renders them unprefixed, each on its own
+line: a page header with a nav link and an `h1` projects as a paragraph and a
+real level-1 heading, not one `### ` line containing a literal `#`.
+"""
+@testitem "markdown - header with blocks renders them unprefixed" setup=[HTMXTestHelpers] tags=[:unit, :markdown] begin
+    page = h.main(
+        h.header(h.nav(class="sqkm-nav")(h.a(href="/")("Landesübersicht Schleswig-Holstein")),
+                 h.h1("Einrichtung Kita-01")),
+        h.section(h.h2("Beschwerden"), h.p("Text")),
+    )
+    @test to_md(page) ==
+        "[Landesübersicht Schleswig-Holstein](/)\n\n# Einrichtung Kita-01\n" *
+        "\n---\n\n## Beschwerden\nText\n\n\n"
+    @test to_md(h.header(h.h2("Recording done"))) == "## Recording done\n"
+    @test to_md(h.header(h.small("kind"), h.h2("label"), h.code("id"))) ==
+        "kind\n\n## label\n`id`\n"
+    @test to_md(h.header(h.p(h.strong("Configure")), h.button("x"))) ==
+        "**Configure**\n\n"
+end
+
+"""
+A block element inside a transparent container starts on its own line: inline
+text before it is closed as a paragraph, so headings, rules, fences and quotes
+are never glued onto the preceding text (and text before a rule never becomes a
+setext heading). A block directly after a list marker or inline opener stays
+where it was.
+"""
+@testitem "markdown - blocks start on their own line" setup=[HTMXTestHelpers] tags=[:unit, :markdown] begin
+    @test to_md(h.div(h.div(h.a(href="/")("x")), h.h1("y"))) == "[x](/)\n\n# y\n"
+    @test to_md(h.div("lead", h.h2("y"), "tail", h.ul(h.li("a")))) ==
+        "lead\n\n## y\ntail\n\n- a\n"
+    @test to_md(h.div("text", h.hr(), "after")) == "text\n\n---\nafter"
+    @test to_md(h.div("intro", h.section(h.p("x")))) == "intro\n\n---\n\nx\n\n\n"
+    @test to_md(h.div("see", h.pre(h.code("x=1")))) == "see\n\n```\nx=1\n```\n"
+    @test to_md(h.blockquote("a", h.h1("b"))) == "> a\n> \n> # b\n\n"
+    @test to_md(h.ul(h.li(h.p("a")), h.li(h.p("b")))) == "- a\n\n\n- b\n\n\n"
+    @test to_md(h.div("see", h.figure(h.img(src="/a.png", alt="A")))) ==
+        "see\n\n:::\n![A](/a.png)\n:::\n\n"
+end
+
+"""
+Content after a list item starts after a blank line, so it is not read as lazy
+continuation of the last item; consecutive items stay a tight list.
+"""
+@testitem "markdown - content after a list item starts a new block" setup=[HTMXTestHelpers] tags=[:unit, :markdown] begin
+    @test to_md(h.div(h.ul(h.li("a"), h.li("b")), "tail")) == "- a\n- b\n\ntail"
+    @test to_md(h.div(h.ul(h.li("a")), h.p("p"))) == "- a\n\np\n\n"
+    @test to_md(h.div(h.ul(h.li("a")), h.h2("b"))) == "- a\n\n## b\n"
+    # whitespace-only text between items keeps them one list
+    @test to_md(h.ul(h.li("a"), " ", h.li("b"))) == "- a\n - b\n"
 end
 
 # ================================================================
