@@ -570,8 +570,13 @@ function _md(io, m, node::Node, ::Val{:figure})
     print(io, "\n")
 end
 
+# A table child is either a row itself (`<tr>` directly under `<table>`, which
+# browsers wrap in an implicit `<tbody>`) or a section whose `<tr>` children
+# are the rows; `caption`/`colgroup` hold no `tr` and so contribute nothing.
 _collect_table_rows!(rows, ::Any) = nothing
-_collect_table_rows!(rows, section::Node) = for row in children(section)
+_collect_table_rows!(rows, c::Node) = _collect_table_rows!(rows, c, Val(tag(c)))
+_collect_table_rows!(rows, row::Node, ::Val{:tr}) = push!(rows, row)
+_collect_table_rows!(rows, section::Node, ::Val) = for row in children(section)
     _push_tr!(rows, row)
 end
 _push_tr!(rows, ::Any) = nothing
