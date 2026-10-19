@@ -476,6 +476,37 @@ accept) render like sectioned rows, in document order; `caption` and
 end
 
 """
+Every table row stays one Markdown line: a `br` in a cell renders as inline
+`<br>`, any other line break in the cell's content (block children,
+multi-line text) folds into `<br>`, and `|` is escaped as `\\|`, also inside
+code spans. Outside a table, `br` is still a newline.
+"""
+@testitem "markdown - table cells stay on one row" setup=[HTMXTestHelpers] tags=[:unit, :markdown] begin
+    @test to_md(h.table(h.tr(h.th("Source | files")),
+        h.tr(h.td(h.strong("Alpha | registry"), h.br(), h.small("a.csv"))))) ==
+        "| Source \\| files |\n| --- |\n| **Alpha \\| registry**<br>a.csv |\n\n"
+    @test to_md(h.table(h.tr(h.td(h.code("p|q")), h.td("a", h.br(), h.br(), "b")))) ==
+        "| `p\\|q` | a<br><br>b |\n| --- | --- |\n\n"
+    @test to_md(h.table(h.tr(h.td(h.p("one"), h.p("two")), h.td("multi\nline"),
+        h.td(h.ul(h.li("i"), h.li("j")))))) ==
+        "| one<br>two | multi<br>line | - i<br>- j |\n| --- | --- | --- |\n\n"
+    @test to_md(h.p("a", h.br(), "b")) == "a\nb\n\n"
+end
+
+"""
+A table as a figure's first child still parses as a table: a blank line
+follows the opening fence, since a pipe table cannot interrupt the paragraph
+that a fence line becomes where it is not a div opener (GFM, an id-less `:::`
+in Pandoc).
+"""
+@testitem "markdown - figure keeps a leading table a block" setup=[HTMXTestHelpers] tags=[:unit, :markdown, :semantic] begin
+    @test to_md(h.figure(h.table(h.tr(h.th("a")), h.tr(h.td("1"))))) ==
+        "\n\n:::\n\n| a |\n| --- |\n| 1 |\n\n:::\n\n"
+    @test to_md(h.figure(id="fig-t")(h.table(h.tr(h.th("a"))), h.figcaption("Cap"))) ==
+        "\n\n::: {#fig-t}\n\n| a |\n| --- |\n\n\nCap\n:::\n\n"
+end
+
+"""
 `md_to_node` parsing followed by Markdown rendering round-trips inline
 formatting (bold, code, link).
 """
@@ -566,7 +597,7 @@ prefix every line.
         h.figcaption("Caption"),
     )
     @test to_md(figure) ==
-        "\n\n::: {#fig-main}\n![A](/a.png)\n\nCaption\n:::\n\n"
+        "\n\n::: {#fig-main}\n\n![A](/a.png)\n\nCaption\n:::\n\n"
 
     details = h.details(h.summary("Toggle"), h.p("Visible ", h.strong("content")))
     @test to_md(details) == "Visible **content**\n\n"
@@ -694,7 +725,7 @@ where it was.
     @test to_md(h.blockquote("a", h.h1("b"))) == "> a\n> \n> # b\n\n"
     @test to_md(h.ul(h.li(h.p("a")), h.li(h.p("b")))) == "- a\n\n\n- b\n\n\n"
     @test to_md(h.div("see", h.figure(h.img(src="/a.png", alt="A")))) ==
-        "see\n\n:::\n![A](/a.png)\n:::\n\n"
+        "see\n\n:::\n\n![A](/a.png)\n:::\n\n"
 end
 
 """
