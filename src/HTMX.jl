@@ -316,8 +316,77 @@ Base.show(io::IO, ::MIME"text/markdown", val::AbstractString) = print(io, val)
 # Arrays: render each element
 Base.show(io::IO, m::MIME"text/markdown", val::AbstractArray) = foreach(v -> show(io, m, v), val)
 
+# Block boundaries. Transparent containers (div, nav, main, ...) mix inline
+# runs and block elements, so a block can follow inline text on the same line
+# (`[link](/)# Title`). Markdown is written through `_MDStream`, which records
+# how the output so far ends; a block that would start mid-line first closes
+# the inline run as a paragraph. One stream spans a whole top-level `show`.
+mutable struct _MDStream{T<:IO} <: IO
+    io::T
+    newlines::Int  # trailing '\n' count, capped at 2; 2 = start of output
+    open::Bool     # the line so far is only a block prefix or inline opener
+    lazy::Bool     # a list item just ended
+    blocks::Int    # block elements started
+end
+_MDStream(io::IO) = _MDStream(io, 2, false, false, 0)
+_md_stream(io::_MDStream) = io
+_md_stream(io::IO) = _MDStream(io)
+
+Base.get(s::_MDStream, key, default) = get(s.io, key, default)
+
+# Content written right after a list item would continue it lazily, so
+# anything but the next item starts after a blank line.
+function _md_before_write!(s::_MDStream, byte::UInt8)
+    if s.lazy && byte != UInt8('\n')
+        s.lazy = false
+        s.newlines < 2 && write(s.io, "\n"^(2 - s.newlines))
+    end
+end
+function _md_after_write!(s::_MDStream, trailing::Int, all_newlines::Bool)
+    s.newlines = min(2, all_newlines ? s.newlines + trailing : trailing)
+    s.open = false
+end
+# Whitespace-only text between elements carries no content: it neither ends a
+# list item nor starts an inline run.
+_md_blank(byte::UInt8) = byte == UInt8(' ') || byte == UInt8('\t')
+function Base.write(s::_MDStream, b::UInt8)
+    _md_blank(b) && return write(s.io, b)
+    _md_before_write!(s, b)
+    n = write(s.io, b)
+    newline = b == UInt8('\n')
+    _md_after_write!(s, Int(newline), newline)
+    n
+end
+function Base.unsafe_write(s::_MDStream, p::Ptr{UInt8}, n::UInt)
+    all(i -> _md_blank(unsafe_load(p, i)), 1:n) && return unsafe_write(s.io, p, n)
+    _md_before_write!(s, unsafe_load(p))
+    written = unsafe_write(s.io, p, n)
+    trailing = 0
+    while trailing < n && unsafe_load(p, n - trailing) == UInt8('\n')
+        trailing += 1
+    end
+    _md_after_write!(s, trailing, trailing == n)
+    written
+end
+
+# Start a block element on its own line. Content that ends mid-line is an
+# inline run, closed here as a paragraph by `close` (less for a block that
+# opens with its own newlines); a block right after a prefix (`- `, `## `) or
+# inline opener (`**`, `[`) stays inline as before.
+function _md_block_start(s::_MDStream, close="\n\n")
+    s.blocks += 1
+    s.newlines == 0 && !s.open && print(s, close)
+    nothing
+end
+# Write a block prefix or inline opener that the element's content follows.
+_md_open(s::_MDStream, prefix) = (print(s, prefix); s.open = true; nothing)
+_md_next_list_item(s::_MDStream) = (s.lazy = false; nothing)
+_md_end_list_item(s::_MDStream) = (s.lazy = true; nothing)
+# Finish a block whose content may end mid-line.
+_md_end_line(s::_MDStream) = (s.newlines == 0 && println(s); nothing)
+
 # Node: dispatch by tag via _md(io, m, node, ::Val{tag})
-Base.show(io::IO, m::MIME"text/markdown", n::Node) = _md(io, m, n, Val(tag(n)))
+Base.show(io::IO, m::MIME"text/markdown", n::Node) = _md(_md_stream(io), m, n, Val(tag(n)))
 
 # Default: recurse transparently (unknown tags fall here)
 _md(io, m, node::Node, ::Val) = _md_recurse(io, m, node)
@@ -333,22 +402,22 @@ end
 # there and no backticks leak into the fenced block.
 for t in (:strong, :b)
     @eval _md(io, m, node::Node, ::Val{$(QuoteNode(t))}) =
-        (print(io, "**"); _md_recurse(io, m, node); print(io, "**"))
+        (_md_open(io, "**"); _md_recurse(io, m, node); print(io, "**"))
 end
 for t in (:em, :i)
     @eval _md(io, m, node::Node, ::Val{$(QuoteNode(t))}) =
-        (print(io, "*"); _md_recurse(io, m, node); print(io, "*"))
+        (_md_open(io, "*"); _md_recurse(io, m, node); print(io, "*"))
 end
 _md(io, m, node::Node, ::Val{:code}) =
-    (print(io, "`"); _md_recurse(io, m, node); print(io, "`"))
+    (_md_open(io, "`"); _md_recurse(io, m, node); print(io, "`"))
 _md(io, m, node::Node, ::Val{:a}) =
-    (print(io, "["); _md_recurse(io, m, node); print(io, "](", get(attrs(node), :href, ""), ")"))
+    (_md_open(io, "["); _md_recurse(io, m, node); print(io, "](", get(attrs(node), :href, ""), ")"))
 _md(io, m, node::Node, ::Val{:br}) = print(io, "\n")
 
 # Headings h1..h6
 for lvl in 1:6
     @eval _md(io, m, node::Node, ::Val{$(QuoteNode(Symbol("h$lvl")))}) =
-        (print(io, $("#"^lvl * " ")); _md_recurse(io, m, node); println(io))
+        (_md_block_start(io); _md_open(io, $("#"^lvl * " ")); _md_recurse(io, m, node); println(io))
 end
 
 # Containers: recurse transparently
@@ -371,12 +440,29 @@ end
 # produce a single divider between them rather than doubled.
 for t in (:article, :section)
     @eval _md(io, m, node::Node, ::Val{$(QuoteNode(t))}) =
-        (println(io); println(io, "---"); println(io); _md_recurse(io, m, node); println(io))
+        (_md_block_start(io, "\n"); println(io); println(io, "---"); println(io); _md_recurse(io, m, node); println(io))
 end
 
-# <header> is the label/title of its surrounding block — render as a level-3
-# heading so the structure is legible to an agent reader.
-_md(io, m, node::Node, ::Val{:header}) = (print(io, "### "); _md_recurse(io, m, node); println(io))
+# <header> is the label/title of its surrounding block — an inline-only header
+# renders as a level-3 heading so the structure is legible to an agent reader.
+# A header holding its own blocks (a heading, nav, paragraph) renders them
+# unchanged: a `### ` prefix would glue them into one heading line.
+function _md(io, m, node::Node, ::Val{:header})
+    _md_block_start(io)
+    if _md_has_blocks(m, node)
+        _md_recurse(io, m, node)
+        _md_end_line(io)
+    else
+        _md_open(io, "### "); _md_recurse(io, m, node); println(io)
+    end
+end
+
+# Whether rendering `node`'s children starts any block element.
+function _md_has_blocks(m, node)
+    probe = _MDStream(devnull)
+    _md_recurse(probe, m, node)
+    probe.blocks > 0
+end
 
 # Non-content tags: skip
 for t in (:script, :style, :meta, :link, :button)
@@ -384,8 +470,11 @@ for t in (:script, :style, :meta, :link, :button)
 end
 
 # Block leaves
-_md(io, m, node::Node, ::Val{:p})     = (_md_recurse(io, m, node); println(io); println(io))
-_md(io, m, node::Node, ::Val{:li})    = (print(io, "- "); _md_recurse(io, m, node); println(io))
+_md(io, m, node::Node, ::Val{:p}) =
+    (_md_block_start(io); _md_recurse(io, m, node); println(io); println(io))
+_md(io, m, node::Node, ::Val{:li}) =
+    (_md_next_list_item(io); _md_block_start(io); _md_open(io, "- ");
+     _md_recurse(io, m, node); println(io); _md_end_list_item(io))
 # Fence for a <pre> block: CommonMark requires the opening/closing fence to be
 # longer than any backtick run inside, so a body containing its own fenced
 # block survives as one code block instead of closing the outer fence early.
@@ -413,23 +502,26 @@ function _md(io, m, node::Node, ::Val{:pre})
     _md_recurse(buf, m, isnothing(code_node) ? node : code_node)
     body = String(take!(buf))
     fence = _md_fence(body)
+    _md_block_start(io)
     println(io, fence, lang)
     print(io, body)
     println(io)
     println(io, fence)
 end
-_md(io, m, node::Node, ::Val{:hr})    = println(io, "---")
+_md(io, m, node::Node, ::Val{:hr})    = (_md_block_start(io); println(io, "---"))
 _md(io, m, node::Node, ::Val{:table}) = _table_to_markdown(io, node)
 
 # <title> → top-level heading (so a full page with <head><title>X</title></head> renders as "# X")
-_md(io, m, node::Node, ::Val{:title}) = (print(io, "# "); _md_recurse(io, m, node); println(io))
+_md(io, m, node::Node, ::Val{:title}) =
+    (_md_block_start(io); _md_open(io, "# "); _md_recurse(io, m, node); println(io))
 
 # <blockquote> → "> "-prefixed lines
 function _md(io, m, node::Node, ::Val{:blockquote})
     buf = IOBuffer()
-    _md_recurse(buf, m, node)
+    _md_recurse(_MDStream(buf), m, node)
     inner = rstrip(String(take!(buf)), '\n')
     isempty(inner) && return
+    _md_block_start(io)
     for line in split(inner, '\n')
         println(io, "> ", line)
     end
@@ -462,6 +554,7 @@ function _md(io, m, node::Node, ::Val{:figure})
             push!(content, c)
         end
     end
+    _md_block_start(io, "")
     print(io, "\n\n")
     println(io, isnothing(id) ? ":::" : "::: {#$id}")
     for (i, c) in enumerate(content)
@@ -497,6 +590,7 @@ function _table_to_markdown(io::IO, table::Node)
         _collect_table_rows!(rows, section)
     end
     isempty(rows) && return
+    _md_block_start(io)
     for (i, row) in enumerate(rows)
         cells = String[]
         for c in children(row)
