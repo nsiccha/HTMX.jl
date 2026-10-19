@@ -412,7 +412,8 @@ _md(io, m, node::Node, ::Val{:code}) =
     (_md_open(io, "`"); _md_recurse(io, m, node); print(io, "`"))
 _md(io, m, node::Node, ::Val{:a}) =
     (_md_open(io, "["); _md_recurse(io, m, node); print(io, "](", get(attrs(node), :href, ""), ")"))
-_md(io, m, node::Node, ::Val{:br}) = print(io, "\n")
+# Inside a table cell a newline would end the row, so the break stays inline HTML.
+_md(io, m, node::Node, ::Val{:br}) = print(io, get(io, :md_table_cell, false) ? "<br>" : "\n")
 
 # Headings h1..h6
 for lvl in 1:6
@@ -537,7 +538,10 @@ function _md(io, m, node::Node, ::Val{:img})
 end
 
 # <figure> → Quarto fenced div.  Blank lines before/after guarantee
-# block-level parsing by Pandoc.  Children are recursed with blank-line
+# block-level parsing by Pandoc; the blank line after the opening fence keeps
+# a first child that cannot interrupt a paragraph (a pipe table) its own block
+# wherever the fence is not a div opener (GFM, a bare `:::` in Pandoc).
+# Children are recursed with blank-line
 # separation (required for Quarto subfigures).  <figcaption> is moved
 # to the final paragraph — Quarto treats the last block inside a
 # `::: {#fig-…}` div as the displayed caption.  Nested <figure> nodes
@@ -557,6 +561,7 @@ function _md(io, m, node::Node, ::Val{:figure})
     _md_block_start(io, "")
     print(io, "\n\n")
     println(io, isnothing(id) ? ":::" : "::: {#$id}")
+    println(io)
     for (i, c) in enumerate(content)
         i > 1 && println(io)
         show(io, m, c)
@@ -582,11 +587,15 @@ end
 _push_tr!(rows, ::Any) = nothing
 _push_tr!(rows, r::Node) = string(tag(r)) == "tr" && push!(rows, r)
 
+# A table row is one line: a cell renders `<br>` as inline HTML (see `_md` for
+# `:br`), folds any other line break (block content, multi-line text) into
+# `<br>`, and escapes `|` so it cannot split the cell, including inside code.
 _push_cell_text!(cells, ::Any) = nothing
 function _push_cell_text!(cells, c::Node)
     buf = IOBuffer()
-    _md_recurse(buf, _md_mime, c)
-    push!(cells, strip(String(take!(buf))))
+    _md_recurse(IOContext(buf, :md_table_cell => true), _md_mime, c)
+    text = replace(strip(String(take!(buf))), r"\s*\n\s*" => "<br>")
+    push!(cells, replace(text, "|" => "\\|"))
 end
 
 function _table_to_markdown(io::IO, table::Node)
