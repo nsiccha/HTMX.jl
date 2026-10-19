@@ -540,8 +540,10 @@ end
 # <figure> → Quarto fenced div.  Blank lines before/after guarantee
 # block-level parsing by Pandoc; the blank line after the opening fence keeps
 # a first child that cannot interrupt a paragraph (a pipe table) its own block
-# wherever the fence is not a div opener (GFM, a bare `:::` in Pandoc).
-# Children are recursed with blank-line
+# wherever the fence is not a div opener (GFM).  Pandoc opens a div only on a
+# fence with attributes — a bare `:::` always closes — so an id-less figure
+# opens with an empty attribute block `::: {}`; that also nests it correctly
+# around identified child figures.  Children are recursed with blank-line
 # separation (required for Quarto subfigures).  <figcaption> is moved
 # to the final paragraph — Quarto treats the last block inside a
 # `::: {#fig-…}` div as the displayed caption.  Nested <figure> nodes
@@ -560,7 +562,7 @@ function _md(io, m, node::Node, ::Val{:figure})
     end
     _md_block_start(io, "")
     print(io, "\n\n")
-    println(io, isnothing(id) ? ":::" : "::: {#$id}")
+    println(io, isnothing(id) ? "::: {}" : "::: {#$id}")
     println(io)
     for (i, c) in enumerate(content)
         i > 1 && println(io)

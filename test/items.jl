@@ -496,14 +496,31 @@ end
 """
 A table as a figure's first child still parses as a table: a blank line
 follows the opening fence, since a pipe table cannot interrupt the paragraph
-that a fence line becomes where it is not a div opener (GFM, an id-less `:::`
-in Pandoc).
+that a fence line becomes where it is not a div opener (GFM).
 """
 @testitem "markdown - figure keeps a leading table a block" setup=[HTMXTestHelpers] tags=[:unit, :markdown, :semantic] begin
     @test to_md(h.figure(h.table(h.tr(h.th("a")), h.tr(h.td("1"))))) ==
-        "\n\n:::\n\n| a |\n| --- |\n| 1 |\n\n:::\n\n"
+        "\n\n::: {}\n\n| a |\n| --- |\n| 1 |\n\n:::\n\n"
     @test to_md(h.figure(id="fig-t")(h.table(h.tr(h.th("a"))), h.figcaption("Cap"))) ==
         "\n\n::: {#fig-t}\n\n| a |\n| --- |\n\n\nCap\n:::\n\n"
+end
+
+"""
+An id-less figure still opens a Pandoc div: Pandoc opens one only on a fence
+with attributes (a bare `:::` always closes), so the opener is `::: {}`. Its
+caption therefore stays inside the div, and an id-less figure around
+identified child figures nests instead of closing at the first child's fence.
+"""
+@testitem "markdown - id-less figure opens a div" setup=[HTMXTestHelpers] tags=[:unit, :markdown, :semantic] begin
+    @test to_md(h.figure(h.table(h.tr(h.th("a")), h.tr(h.td("1"))), h.figcaption("Cap"))) ==
+        "\n\n::: {}\n\n| a |\n| --- |\n| 1 |\n\n\nCap\n:::\n\n"
+    composite = h.figure(
+        h.figure(id="fig-a")(h.img(src="/a.png", alt="A"), h.figcaption("A")),
+        h.figure(id="fig-b")(h.img(src="/b.png", alt="B"), h.figcaption("B")),
+        h.figcaption("Both"))
+    @test to_md(composite) ==
+        "\n\n::: {}\n\n\n\n::: {#fig-a}\n\n![A](/a.png)\n\nA\n:::\n\n\n\n\n" *
+        "::: {#fig-b}\n\n![B](/b.png)\n\nB\n:::\n\n\nBoth\n:::\n\n"
 end
 
 """
@@ -725,7 +742,7 @@ where it was.
     @test to_md(h.blockquote("a", h.h1("b"))) == "> a\n> \n> # b\n\n"
     @test to_md(h.ul(h.li(h.p("a")), h.li(h.p("b")))) == "- a\n\n\n- b\n\n\n"
     @test to_md(h.div("see", h.figure(h.img(src="/a.png", alt="A")))) ==
-        "see\n\n:::\n\n![A](/a.png)\n:::\n\n"
+        "see\n\n::: {}\n\n![A](/a.png)\n:::\n\n"
 end
 
 """
