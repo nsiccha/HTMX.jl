@@ -464,6 +464,18 @@ rendered back to Markdown.
 end
 
 """
+Rows that sit directly under `<table>` (no `thead`/`tbody`, as browsers
+accept) render like sectioned rows, in document order; `caption` and
+`colgroup` contribute nothing.
+"""
+@testitem "markdown - table rows without sections" setup=[HTMXTestHelpers] tags=[:unit, :markdown] begin
+    @test to_md(h.table(h.tr(h.th("a")), h.tr(h.td("1")))) == "| a |\n| --- |\n| 1 |\n\n"
+    @test to_md(h.div("Total", h.table(h.tr(h.td("a"))))) == "Total\n\n| a |\n| --- |\n\n"
+    @test to_md(h.table(h.caption("c"), h.colgroup(h.col()), h.thead(h.tr(h.th("a"))),
+        h.tr(h.td("1")), h.tbody(h.tr(h.td("2"))))) == "| a |\n| --- |\n| 1 |\n| 2 |\n\n"
+end
+
+"""
 `md_to_node` parsing followed by Markdown rendering round-trips inline
 formatting (bold, code, link).
 """
