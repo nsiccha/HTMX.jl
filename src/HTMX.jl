@@ -329,8 +329,14 @@ mutable struct _MDStream{T<:IO} <: IO
     lazy::Bool     # a list item or block container just ended
     blocks::Int    # block elements started, or containers that split content
     inline::Int    # depth of content that must stay one paragraph
+    item::Int      # depth of list items being written
+    items::Int     # list items written so far
+    number::Union{Nothing,Int}  # next `<ol>` item number; nothing outside an `<ol>`
+    last_list::Symbol  # kind (:ul/:ol) of a list that just ended, else :none
+    lang::String   # language of the enclosing content; "" = not declared
 end
-_MDStream(io::IO) = _MDStream(io, 2, false, false, 0, 0)
+_MDStream(io::IO; inline=0, item=0, lang="") =
+    _MDStream(io, 2, false, false, 0, inline, item, 0, nothing, :none, lang)
 _md_stream(io::_MDStream) = io
 _md_stream(io::IO) = _MDStream(io)
 
@@ -348,6 +354,7 @@ end
 function _md_after_write!(s::_MDStream, trailing::Int, all_newlines::Bool)
     s.newlines = min(2, all_newlines ? s.newlines + trailing : trailing)
     s.open = false
+    all_newlines || (s.last_list = :none)
 end
 # Whitespace-only text between elements carries no content: it neither ends a
 # list item nor starts an inline run.
@@ -389,6 +396,8 @@ _md_next_list_item(s::_MDStream) = (s.lazy = false; nothing)
 _md_end_list_item(s::_MDStream) = (s.lazy = true; nothing)
 # Finish a block whose content may end mid-line.
 _md_end_line(s::_MDStream) = (s.newlines == 0 && println(s); nothing)
+# End the output so far with a blank line (unless it is still empty).
+_md_blank_line(s::_MDStream) = (s.newlines < 2 && print(s, "\n"^(2 - s.newlines)); nothing)
 
 # A block container (div, nav, ...) is a paragraph boundary: inline text before
 # it is closed as a paragraph, and content after it starts a new one. It adds no
@@ -404,8 +413,82 @@ _md_container(s::_MDStream, m, node) =
 _md_inline_recurse(s::_MDStream, m, node) =
     (s.inline += 1; _md_recurse(s, m, node); s.inline -= 1; nothing)
 
-# Node: dispatch by tag via _md(io, m, node, ::Val{tag})
-Base.show(io::IO, m::MIME"text/markdown", n::Node) = _md(_md_stream(io), m, n, Val(tag(n)))
+# Node: dispatch by tag via _md(io, m, node, ::Val{tag}), inside a language
+# scope when the node declares a language other than the enclosing one
+Base.show(io::IO, m::MIME"text/markdown", n::Node) = _md_node(_md_stream(io), m, n)
+function _md_node(s::_MDStream, m, n::Node)
+    v = Val(tag(n))
+    lang = _md_lang_change(s, n)
+    isnothing(lang) && return _md(s, m, n, v)
+    _md_lang(t -> _md(t, m, n, v), s, lang, _md_lang_kind(v))
+end
+
+# Language of parts. An element whose `lang` differs from the enclosing
+# language is written in a Pandoc language scope, which Quarto carries into its
+# output (Typst `set text(lang: …)`, LaTeX `otherlanguage`): a block becomes a
+# fenced div `::: {lang="en"}`, inline content a bracketed span
+# `[…]{lang="en"}`. A block where a fence would break the line (inside inline
+# content, a list item or a table cell) becomes a span too. `<html lang>` is the
+# document language, which Quarto takes from its own `lang:` setting, so it
+# writes nothing. Inside a `<pre>` body every child stays verbatim.
+_md_declared_lang(n::Node) = (l = get(attrs(n), :lang, nothing);
+    l === nothing || l === false || isempty(string(l)) ? nothing : string(l))
+_md_same_lang(a, b) = lowercase(a) == lowercase(b)
+function _md_lang_change(s::_MDStream, n::Node)
+    lang = _md_declared_lang(n)
+    isnothing(lang) || get(s, :md_verbatim, false) || _md_same_lang(lang, s.lang) ? nothing : lang
+end
+# The language a table row or cell inherits: its own, else its section's.
+_md_own_lang(n::Node, lang) = something(_md_declared_lang(n), lang)
+
+# How an element's own language scope is written.
+_md_lang_kind(::Val) = Val(:inline)
+_md_lang_kind(::Val{:html}) = Val(:document)
+_md_lang_kind(::Val{:li}) = Val(:item)  # the item writes it inside its marker
+for t in (:br, :hr, :head, :script, :style, :meta, :link, :button)
+    @eval _md_lang_kind(::Val{$(QuoteNode(t))}) = Val(:none)
+end
+
+_md_lang(f, s, lang, ::Union{Val{:none},Val{:item}}) = f(s)
+_md_lang(f, s, lang, ::Val{:document}) = _md_in_lang(f, s, lang)
+_md_lang(f, s, lang, ::Val{:inline}) = _md_lang_span(f, s, lang)
+_md_lang(f, s, lang, ::Val{:block}) =
+    s.inline > 0 || s.item > 0 || get(s, :md_table_cell, false) ?
+        _md_lang_span(f, s, lang) : _md_lang_fence(f, s, lang)
+
+function _md_in_lang(f, s::_MDStream, lang)
+    prev = s.lang
+    s.lang = lang
+    f(s)
+    s.lang = prev
+    nothing
+end
+function _md_lang_fence(f, s::_MDStream, lang)
+    _md_block_start(s)
+    _md_blank_line(s)
+    println(s, "::: {lang=", _md_attr_value(lang), "}")
+    println(s)
+    _md_in_lang(f, s, lang)
+    _md_end_line(s)
+    println(s, ":::")
+    print(s, "\n")
+end
+# The span's content renders into its own buffer, so the leading and trailing
+# line breaks of a block inside it stay outside the brackets.
+function _md_lang_span(f, s::_MDStream, lang)
+    buf = IOBuffer()
+    t = _MDStream(IOContext(buf, s.io); inline=s.inline + 1, item=s.item, lang)
+    f(t)
+    s.blocks += t.blocks
+    text = strip(String(take!(buf)), '\n')
+    isempty(text) || print(s, _md_lang_span_text(text, lang))
+end
+_md_lang_span_text(text, lang) = string("[", text, "]{lang=", _md_attr_value(lang), "}")
+
+# A quoted Pandoc attribute value; a line break becomes a space, so the
+# attribute stays on its line (a heading, a table row).
+_md_attr_value(v) =
+    string('"', replace(string(v), '\\' => "\\\\", '"' => "\\\"", r"\r\n?|\n" => " "), '"')
 
 # Default: recurse transparently (unknown tags fall here)
 _md(io, m, node::Node, ::Val) = _md_recurse(io, m, node)
@@ -464,16 +547,60 @@ for lvl in 1:6
         (_md_block_start(io); _md_open(io, $("#"^lvl * " ")); _md_inline_recurse(io, m, node); println(io))
 end
 
-# Other containers: recurse transparently (inline elements, and lists and
-# table sections, whose items and rows place their own blocks)
-for t in (:head, :span, :ul, :ol, :thead, :tbody, :tr, :summary, :label)
+# Other containers: recurse transparently (inline elements, and table
+# sections, whose rows place their own blocks)
+for t in (:head, :span, :thead, :tbody, :tr, :summary, :label)
     @eval _md(io, m, node::Node, ::Val{$(QuoteNode(t))}) = _md_recurse(io, m, node)
 end
 
+# Lists: items place their own blocks; an `<ol>` numbers them from its `start`.
+# A list that directly follows another list starts after a blank line (else
+# CommonMark reads `3. b` right after `- a` as continuation text), and one of
+# the same kind also after a `<!-- -->` line: without it Pandoc and CommonMark
+# read the two as one list (a change of bullet character does not split a
+# Pandoc list).
+_md(io, m, node::Node, ::Val{:ul}) = _md_list(io, m, node, :ul, nothing)
+_md(io, m, node::Node, ::Val{:ol}) = _md_list(io, m, node, :ol, _md_list_start(node))
+function _md_list(s::_MDStream, m, node, kind, number)
+    if s.last_list !== :none
+        _md_blank_line(s)
+        s.last_list === kind && print(s, "<!-- -->\n\n")
+    end
+    prev, items = s.number, s.items
+    s.number = number
+    _md_recurse(s, m, node)
+    s.number = prev
+    s.items > items && (s.last_list = kind)
+    nothing
+end
+function _md_list_start(node)
+    v = get(attrs(node), :start, nothing)
+    (v === nothing || v === false) && return 1
+    n = v isa Integer ? v : tryparse(Int, strip(string(v)))
+    n isa Integer && 0 <= n <= 999_999_999 || throw(ArgumentError(
+        "<ol start=$(repr(v))> has no Markdown form: a list number is an integer from 0 to 999999999"))
+    Int(n)
+end
+# The marker of the next list item: `- `, or `<number>. ` inside an `<ol>`.
+function _md_item_marker(s::_MDStream)
+    isnothing(s.number) && return "- "
+    n = s.number
+    s.number = n + 1
+    string(n, ". ")
+end
+
 # Block containers (block elements in HTML): recurse as a paragraph boundary
-for t in (:div, :main, :body, :html, :form, :nav, :footer, :aside, :address,
-          :fieldset, :hgroup, :dialog, :dl, :dt, :dd)
+const _MD_CONTAINERS = (:div, :main, :body, :html, :form, :nav, :footer, :aside,
+                        :address, :fieldset, :hgroup, :dialog, :dl, :dt, :dd)
+for t in _MD_CONTAINERS
     @eval _md(io, m, node::Node, ::Val{$(QuoteNode(t))}) = _md_container(io, m, node)
+end
+
+# Block elements whose own language scope is a fenced div (see `_md_lang`)
+for t in (_MD_CONTAINERS..., :details, :article, :section, :header, :p,
+          (Symbol("h$lvl") for lvl in 1:6)..., :title, :pre, :blockquote,
+          :figure, :figcaption, :table, :ul, :ol)
+    t === :html || @eval _md_lang_kind(::Val{$(QuoteNode(t))}) = Val(:block)
 end
 
 # <details>: a block container that skips the <summary> toggle label
@@ -500,7 +627,7 @@ end
 # unchanged: a `### ` prefix would glue them into one heading line.
 function _md(io, m, node::Node, ::Val{:header})
     _md_block_start(io)
-    if _md_has_blocks(m, node)
+    if _md_has_blocks(io, m, node)
         _md_recurse(io, m, node)
         _md_end_line(io)
     else
@@ -509,8 +636,8 @@ function _md(io, m, node::Node, ::Val{:header})
 end
 
 # Whether rendering `node`'s children starts any block element.
-function _md_has_blocks(m, node)
-    probe = _MDStream(devnull)
+function _md_has_blocks(s::_MDStream, m, node)
+    probe = _MDStream(devnull; lang=s.lang)
     _md_recurse(probe, m, node)
     probe.blocks > 0
 end
@@ -523,9 +650,17 @@ end
 # Block leaves
 _md(io, m, node::Node, ::Val{:p}) =
     (_md_block_start(io); _md_recurse(io, m, node); println(io); println(io))
-_md(io, m, node::Node, ::Val{:li}) =
-    (_md_next_list_item(io); _md_block_start(io); _md_open(io, "- ");
-     _md_recurse(io, m, node); println(io); _md_end_list_item(io))
+# A list item's own language is a span after its marker, so the item stays in
+# its list.
+function _md(io, m, node::Node, ::Val{:li})
+    _md_next_list_item(io); _md_block_start(io); _md_open(io, _md_item_marker(io))
+    io.item += 1
+    io.items += 1
+    lang = _md_lang_change(io, node)
+    isnothing(lang) ? _md_recurse(io, m, node) : _md_lang_span(t -> _md_recurse(t, m, node), io, lang)
+    io.item -= 1
+    println(io); _md_end_list_item(io)
+end
 # Fence for a <pre> block: CommonMark requires the opening/closing fence to be
 # longer than any backtick run inside, so a body containing its own fenced
 # block survives as one code block instead of closing the outer fence early.
@@ -550,7 +685,7 @@ function _md(io, m, node::Node, ::Val{:pre})
         end
     end
     buf = IOBuffer()
-    _md_recurse(buf, m, isnothing(code_node) ? node : code_node)
+    _md_recurse(IOContext(buf, :md_verbatim => true), m, isnothing(code_node) ? node : code_node)
     body = String(take!(buf))
     fence = _md_fence(body)
     _md_block_start(io)
@@ -569,7 +704,7 @@ _md(io, m, node::Node, ::Val{:title}) =
 # <blockquote> → "> "-prefixed lines
 function _md(io, m, node::Node, ::Val{:blockquote})
     buf = IOBuffer()
-    _md_recurse(_MDStream(buf), m, node)
+    _md_recurse(_MDStream(buf; lang=io.lang), m, node)
     inner = rstrip(String(take!(buf)), '\n')
     isempty(inner) && return
     _md_block_start(io)
@@ -579,12 +714,18 @@ function _md(io, m, node::Node, ::Val{:blockquote})
     println(io)
 end
 
-# <img> → ![alt](src)
+# <img> → ![](src){alt="…"}, inline as in HTML. Its alt text is a Pandoc
+# attribute, not the image description: a described image alone in its
+# paragraph is a Pandoc implicit figure, whose caption Quarto takes from the
+# description while the image itself loses its alt text (a PDF/UA build then
+# fails). GFM and Julia Markdown show the attribute as text.
 function _md(io, m, node::Node, ::Val{:img})
     a = attrs(node)
     src = get(a, :src, "")
     isempty(src) && return
-    println(io, "![", get(a, :alt, ""), "](", src, ")")
+    print(io, "![](", src, ")")
+    alt = get(a, :alt, nothing)
+    (alt === nothing || alt === false) || print(io, "{alt=", _md_attr_value(alt), "}")
 end
 
 # <figure> → Quarto fenced div.  Blank lines before/after guarantee
@@ -617,16 +758,24 @@ function _md(io, m, node::Node, ::Val{:figure})
     println(io, isnothing(id) ? "::: {}" : "::: {#$id}")
     println(io)
     for (i, c) in enumerate(content)
-        i > 1 && println(io)
+        i > 1 && (_md_end_line(io); println(io))
         _md_child(io, m, c)
     end
     if !isnothing(caption_node)
+        _md_end_line(io)
         println(io)
-        _md_inline_recurse(io, m, caption_node)
+        _md_figure_caption(io, m, caption_node)
         println(io)
     end
+    _md_end_line(io)
     println(io, ":::")
     print(io, "\n")
+end
+# The caption stays one paragraph, so its own language is a span.
+function _md_figure_caption(io, m, caption)
+    lang = _md_lang_change(io, caption)
+    isnothing(lang) ? _md_inline_recurse(io, m, caption) :
+        _md_lang_span(t -> _md_inline_recurse(t, m, caption), io, lang)
 end
 
 # A <figcaption> placed outside a figure (in a custom layout) is a block whose
@@ -637,38 +786,44 @@ _md(io, m, node::Node, ::Val{:figcaption}) =
 # A table child is either a row itself (`<tr>` directly under `<table>`, which
 # browsers wrap in an implicit `<tbody>`) or a section whose `<tr>` children
 # are the rows; `caption`/`colgroup` hold no `tr` and so contribute nothing.
-_collect_table_rows!(rows, ::Any) = nothing
-_collect_table_rows!(rows, c::Node) = _collect_table_rows!(rows, c, Val(tag(c)))
-_collect_table_rows!(rows, row::Node, ::Val{:tr}) = push!(rows, row)
-_collect_table_rows!(rows, section::Node, ::Val) = for row in children(section)
-    _push_tr!(rows, row)
+# Each row is collected with the language it inherits from its section.
+_collect_table_rows!(rows, ::Any, lang) = nothing
+_collect_table_rows!(rows, c::Node, lang) =
+    _collect_table_rows!(rows, c, _md_own_lang(c, lang), Val(tag(c)))
+_collect_table_rows!(rows, row::Node, lang, ::Val{:tr}) = push!(rows, row => lang)
+_collect_table_rows!(rows, section::Node, lang, ::Val) = for row in children(section)
+    _push_tr!(rows, row, lang)
 end
-_push_tr!(rows, ::Any) = nothing
-_push_tr!(rows, r::Node) = string(tag(r)) == "tr" && push!(rows, r)
+_push_tr!(rows, ::Any, lang) = nothing
+_push_tr!(rows, r::Node, lang) = string(tag(r)) == "tr" && push!(rows, r => _md_own_lang(r, lang))
 
 # A table row is one line: a cell renders `<br>` as inline HTML (see `_md` for
 # `:br`), folds any other line break (block content, multi-line text) into
 # `<br>`, and escapes `|` so it cannot split the cell, including inside code.
 # The cell's children share one stream, so blocks among them are delimited.
-_push_cell_text!(cells, ::Any) = nothing
-function _push_cell_text!(cells, c::Node)
+# A cell whose language (its own, else its row's) differs from the table's is
+# a language span.
+_push_cell_text!(cells, ::Any, lang, table_lang) = nothing
+function _push_cell_text!(cells, c::Node, lang, table_lang)
+    lang = _md_own_lang(c, lang)
     buf = IOBuffer()
-    _md_recurse(_MDStream(IOContext(buf, :md_table_cell => true)), _md_mime, c)
+    _md_recurse(_MDStream(IOContext(buf, :md_table_cell => true); lang), _md_mime, c)
     text = replace(strip(String(take!(buf))), r"\s*\n\s*" => "<br>")
-    push!(cells, replace(text, "|" => "\\|"))
+    text = replace(text, "|" => "\\|")
+    push!(cells, isempty(text) || _md_same_lang(lang, table_lang) ? text : _md_lang_span_text(text, lang))
 end
 
-function _table_to_markdown(io::IO, table::Node)
-    rows = Node[]
+function _table_to_markdown(io::_MDStream, table::Node)
+    rows = Pair{Node,String}[]
     for section in children(table)
-        _collect_table_rows!(rows, section)
+        _collect_table_rows!(rows, section, io.lang)
     end
     isempty(rows) && return
     _md_block_start(io)
-    for (i, row) in enumerate(rows)
+    for (i, (row, lang)) in enumerate(rows)
         cells = String[]
         for c in children(row)
-            _push_cell_text!(cells, c)
+            _push_cell_text!(cells, c, lang, io.lang)
         end
         println(io, "| ", join(cells, " | "), " |")
         if i == 1
