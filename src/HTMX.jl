@@ -629,6 +629,11 @@ function _md(io, m, node::Node, ::Val{:figure})
     print(io, "\n")
 end
 
+# A <figcaption> placed outside a figure (in a custom layout) is a block whose
+# content is still one paragraph, as inside a figure.
+_md(io, m, node::Node, ::Val{:figcaption}) =
+    (_md_container_start(io); _md_inline_recurse(io, m, node); _md_container_end(io))
+
 # A table child is either a row itself (`<tr>` directly under `<table>`, which
 # browsers wrap in an implicit `<tbody>`) or a section whose `<tr>` children
 # are the rows; `caption`/`colgroup` hold no `tr` and so contribute nothing.

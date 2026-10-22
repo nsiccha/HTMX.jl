@@ -794,6 +794,9 @@ caption, which Quarto reads as the figure div's last paragraph.
     caption = h.figcaption(h.div(class="caption-header")(h.span(h.strong("Title"), " — short")), " — long")
     @test to_md(h.figure(id="fig-a")(h.img(src="/a.png", alt="A"), caption)) ==
         "\n\n::: {#fig-a}\n\n![A](/a.png)\n\n**Title** — short — long\n:::\n\n"
+    # a caption rendered on its own (placed in a custom layout) stays one paragraph too
+    @test to_md(caption) == "**Title** — short — long"
+    @test to_md(h.div("before", caption, "after")) == "before\n\n**Title** — short — long\n\nafter"
 end
 
 """
