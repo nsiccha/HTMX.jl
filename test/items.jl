@@ -757,6 +757,65 @@ continuation of the last item; consecutive items stay a tight list.
     @test to_md(h.ul(h.li("a"), " ", h.li("b"))) == "- a\n - b\n"
 end
 
+"""
+A block container (`div`, `nav`, `dl`, `details`, ...) is a paragraph boundary,
+as in HTML: inline text before it is closed as a paragraph and content after it
+starts a new one, so sibling divs no longer run together. It adds no trailing
+blank line of its own, so a lone or nested container renders as before.
+"""
+@testitem "markdown - block containers are paragraph boundaries" setup=[HTMXTestHelpers] tags=[:unit, :markdown] begin
+    @test to_md(h.div(h.div("one"), h.div("two"))) == "one\n\ntwo"
+    @test to_md(h.div("lead", h.div("x"), "tail")) == "lead\n\nx\n\ntail"
+    @test to_md(h.div(h.div(h.div("x")), h.nav("y"))) == "x\n\ny"
+    @test to_md(h.div("x")) == "x"
+    @test to_md(h.div("a", h.div(), "b")) == "a\n\nb"
+    @test to_md(h.dl(h.dt("Term"), h.dd("Def"))) == "Term\n\nDef"
+    @test to_md(h.div("x", h.details(h.summary("s"), "content"), "y")) == "x\n\ncontent\n\ny"
+    @test to_md([h.div("a"), h.div("b")]) == "a\n\nb"
+    @test to_md(h.div(h.span("a"), h.span("b"))) == "ab"
+    # a table cell folds the boundary into `<br>`
+    @test to_md(h.table(h.tr(h.td(h.div("a"), h.div("b")), h.td("x", h.p("y"))))) ==
+        "| a<br>b | x<br>y |\n| --- | --- |\n\n"
+    # list items stay one tight list; an inline-only header keeps its label
+    @test to_md(h.ul(h.li(h.div("a")), h.li(h.div("b")))) == "- a\n- b\n"
+    @test to_md(h.header(h.div("Title"))) == "### Title\n"
+    @test to_md(h.header(h.div("T"), h.div("sub"))) == "T\n\nsub\n"
+end
+
+"""
+Content that must stay one paragraph keeps its block containers transparent:
+the text of a link or other inline element, a heading line, and a figure
+caption, which Quarto reads as the figure div's last paragraph.
+"""
+@testitem "markdown - containers stay inline in links, headings and captions" setup=[HTMXTestHelpers] tags=[:unit, :markdown, :semantic] begin
+    @test to_md(h.div(h.a(href="/")(h.div("card"), h.div("sub")), "after")) == "[cardsub](/)after"
+    @test to_md(h.strong(h.div("a"), h.div("b"))) == "**ab**"
+    @test to_md(h.h2(h.div("a"), h.div("b"))) == "## ab\n"
+    caption = h.figcaption(h.div(class="caption-header")(h.span(h.strong("Title"), " — short")), " — long")
+    @test to_md(h.figure(id="fig-a")(h.img(src="/a.png", alt="A"), caption)) ==
+        "\n\n::: {#fig-a}\n\n![A](/a.png)\n\n**Title** — short — long\n:::\n\n"
+end
+
+"""
+A non-`Node` child is spliced into the running line unless its type declares
+`HTMX.markdown_block`, which delimits it like a `div` among a node's children
+or a vector's elements; inside a link it stays inline.
+"""
+@testitem "markdown - markdown_block delimits non-Node children" setup=[HTMXTestHelpers] tags=[:unit, :markdown] begin
+    struct InlineThing end
+    struct BlockThing end
+    Base.show(io::IO, ::MIME"text/markdown", ::InlineThing) = print(io, "[i]")
+    Base.show(io::IO, ::MIME"text/markdown", ::BlockThing) = print(io, "**A:** 1")
+    HTMX.markdown_block(::BlockThing) = true
+
+    @test !HTMX.markdown_block(InlineThing())
+    @test to_md(h.div(InlineThing(), InlineThing())) == "[i][i]"
+    @test to_md(h.div(BlockThing(), BlockThing())) == "**A:** 1\n\n**A:** 1"
+    @test to_md(h.div("lead", BlockThing(), "tail")) == "lead\n\n**A:** 1\n\ntail"
+    @test to_md([BlockThing(), BlockThing()]) == "**A:** 1\n\n**A:** 1"
+    @test to_md(h.a(href="/")(BlockThing(), "x")) == "[**A:** 1x](/)"
+end
+
 # ================================================================
 # HXML (Hyperview) rendering
 # ================================================================

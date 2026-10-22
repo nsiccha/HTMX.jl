@@ -313,11 +313,12 @@ Base.show(io::IO, ::MIME"text/markdown", val) = print(io, string(val))
 # Strings pass through as-is
 Base.show(io::IO, ::MIME"text/markdown", val::AbstractString) = print(io, val)
 
-# Arrays: render each element
-Base.show(io::IO, m::MIME"text/markdown", val::AbstractArray) = foreach(v -> show(io, m, v), val)
+# Arrays: render each element as siblings, the way a node's children render
+Base.show(io::IO, m::MIME"text/markdown", val::AbstractArray) =
+    (s = _md_stream(io); foreach(v -> _md_child(s, m, v), val))
 
-# Block boundaries. Transparent containers (div, nav, main, ...) mix inline
-# runs and block elements, so a block can follow inline text on the same line
+# Block boundaries. Containers (div, nav, main, ...) mix inline runs and block
+# elements, so a block can follow inline text on the same line
 # (`[link](/)# Title`). Markdown is written through `_MDStream`, which records
 # how the output so far ends; a block that would start mid-line first closes
 # the inline run as a paragraph. One stream spans a whole top-level `show`.
@@ -325,21 +326,23 @@ mutable struct _MDStream{T<:IO} <: IO
     io::T
     newlines::Int  # trailing '\n' count, capped at 2; 2 = start of output
     open::Bool     # the line so far is only a block prefix or inline opener
-    lazy::Bool     # a list item just ended
-    blocks::Int    # block elements started
+    lazy::Bool     # a list item or block container just ended
+    blocks::Int    # block elements started, or containers that split content
+    inline::Int    # depth of content that must stay one paragraph
 end
-_MDStream(io::IO) = _MDStream(io, 2, false, false, 0)
+_MDStream(io::IO) = _MDStream(io, 2, false, false, 0, 0)
 _md_stream(io::_MDStream) = io
 _md_stream(io::IO) = _MDStream(io)
 
 Base.get(s::_MDStream, key, default) = get(s.io, key, default)
 
-# Content written right after a list item would continue it lazily, so
-# anything but the next item starts after a blank line.
+# Content written right after a list item would continue it lazily, and content
+# after a block container belongs to a new paragraph, so anything but the next
+# item starts after a blank line.
 function _md_before_write!(s::_MDStream, byte::UInt8)
     if s.lazy && byte != UInt8('\n')
         s.lazy = false
-        s.newlines < 2 && write(s.io, "\n"^(2 - s.newlines))
+        s.newlines < 2 && (s.blocks += 1; write(s.io, "\n"^(2 - s.newlines)))
     end
 end
 function _md_after_write!(s::_MDStream, trailing::Int, all_newlines::Bool)
@@ -375,9 +378,11 @@ end
 # inline opener (`**`, `[`) stays inline as before.
 function _md_block_start(s::_MDStream, close="\n\n")
     s.blocks += 1
-    s.newlines == 0 && !s.open && print(s, close)
+    _md_close_inline(s, close)
     nothing
 end
+# Close an inline run that ends mid-line; returns whether there was one.
+_md_close_inline(s::_MDStream, close="\n\n") = s.newlines == 0 && !s.open && (print(s, close); true)
 # Write a block prefix or inline opener that the element's content follows.
 _md_open(s::_MDStream, prefix) = (print(s, prefix); s.open = true; nothing)
 _md_next_list_item(s::_MDStream) = (s.lazy = false; nothing)
@@ -385,55 +390,100 @@ _md_end_list_item(s::_MDStream) = (s.lazy = true; nothing)
 # Finish a block whose content may end mid-line.
 _md_end_line(s::_MDStream) = (s.newlines == 0 && println(s); nothing)
 
+# A block container (div, nav, ...) is a paragraph boundary: inline text before
+# it is closed as a paragraph, and content after it starts a new one. It adds no
+# trailing blank line of its own, so nested containers and the end of output
+# stay as they are. Inside content that must stay one paragraph (an inline
+# element, a heading, a figure caption) it is transparent.
+_md_container_start(s::_MDStream) =
+    (s.inline == 0 && _md_close_inline(s) && (s.blocks += 1); nothing)
+_md_container_end(s::_MDStream) = (s.inline == 0 && (s.lazy = true); nothing)
+_md_container(s::_MDStream, m, node) =
+    (_md_container_start(s); _md_recurse(s, m, node); _md_container_end(s))
+# Recurse into content that must stay one paragraph.
+_md_inline_recurse(s::_MDStream, m, node) =
+    (s.inline += 1; _md_recurse(s, m, node); s.inline -= 1; nothing)
+
 # Node: dispatch by tag via _md(io, m, node, ::Val{tag})
 Base.show(io::IO, m::MIME"text/markdown", n::Node) = _md(_md_stream(io), m, n, Val(tag(n)))
 
 # Default: recurse transparently (unknown tags fall here)
 _md(io, m, node::Node, ::Val) = _md_recurse(io, m, node)
 
+"""
+    HTMX.markdown_block(x) -> Bool
+
+Whether a non-`Node` value `x` is a block in Markdown, as a `div` is. Among a
+node's children (or a vector's elements), a block starts on its own line —
+inline text before it is closed as a paragraph — and whatever follows it starts
+a new paragraph. Otherwise `x`'s `show(io, MIME"text/markdown"(), x)` output is
+spliced into the running line, as inline text is. Defaults to `false`; declare
+it for a type whose HTML is a block element, so its siblings do not run into it:
+
+```julia
+HTMX.markdown_block(::MyCard) = true
+```
+
+A `Node` is a block or not by its tag; this function is not consulted for it.
+"""
+markdown_block(x) = false
+
 # Recurse into children as if the node were transparent
 _md_recurse(io, m, node) = for c in children(node)
-    show(io, m, c)
+    _md_child(io, m, c)
 end
+# One child among its siblings. Outside a Markdown stream (a `<pre>` body)
+# children are written verbatim.
+_md_child(io, m, c) = show(io, m, c)
+_md_child(io::_MDStream, m, c) = markdown_block(c) ?
+    (_md_container_start(io); show(io, m, c); _md_container_end(io)) : show(io, m, c)
 
 # Inline formatting — written straight to io (no intermediate strings). These
 # fire for inline elements everywhere EXCEPT inside <pre>: its handler recurses
 # into the <code> child's own children, so _md is never dispatched on <code>
-# there and no backticks leak into the fenced block.
+# there and no backticks leak into the fenced block. Their content stays one
+# paragraph (a `div` inside a link card stays inside the link text).
 for t in (:strong, :b)
     @eval _md(io, m, node::Node, ::Val{$(QuoteNode(t))}) =
-        (_md_open(io, "**"); _md_recurse(io, m, node); print(io, "**"))
+        (_md_open(io, "**"); _md_inline_recurse(io, m, node); print(io, "**"))
 end
 for t in (:em, :i)
     @eval _md(io, m, node::Node, ::Val{$(QuoteNode(t))}) =
-        (_md_open(io, "*"); _md_recurse(io, m, node); print(io, "*"))
+        (_md_open(io, "*"); _md_inline_recurse(io, m, node); print(io, "*"))
 end
 _md(io, m, node::Node, ::Val{:code}) =
-    (_md_open(io, "`"); _md_recurse(io, m, node); print(io, "`"))
+    (_md_open(io, "`"); _md_inline_recurse(io, m, node); print(io, "`"))
 _md(io, m, node::Node, ::Val{:a}) =
-    (_md_open(io, "["); _md_recurse(io, m, node); print(io, "](", get(attrs(node), :href, ""), ")"))
+    (_md_open(io, "["); _md_inline_recurse(io, m, node); print(io, "](", get(attrs(node), :href, ""), ")"))
 # Inside a table cell a newline would end the row, so the break stays inline HTML.
 _md(io, m, node::Node, ::Val{:br}) = print(io, get(io, :md_table_cell, false) ? "<br>" : "\n")
 
-# Headings h1..h6
+# Headings h1..h6: one line, so their content stays one paragraph
 for lvl in 1:6
     @eval _md(io, m, node::Node, ::Val{$(QuoteNode(Symbol("h$lvl")))}) =
-        (_md_block_start(io); _md_open(io, $("#"^lvl * " ")); _md_recurse(io, m, node); println(io))
+        (_md_block_start(io); _md_open(io, $("#"^lvl * " ")); _md_inline_recurse(io, m, node); println(io))
 end
 
-# Containers: recurse transparently
-for t in (:div, :main, :body, :html, :head,
-          :span, :ul, :ol, :thead, :tbody, :tr, :summary,
-          :form, :label, :nav, :footer, :dl)
+# Other containers: recurse transparently (inline elements, and lists and
+# table sections, whose items and rows place their own blocks)
+for t in (:head, :span, :ul, :ol, :thead, :tbody, :tr, :summary, :label)
     @eval _md(io, m, node::Node, ::Val{$(QuoteNode(t))}) = _md_recurse(io, m, node)
 end
 
-# <details>: skip the <summary> toggle label, recurse the content
+# Block containers (block elements in HTML): recurse as a paragraph boundary
+for t in (:div, :main, :body, :html, :form, :nav, :footer, :aside, :address,
+          :fieldset, :hgroup, :dialog, :dl, :dt, :dd)
+    @eval _md(io, m, node::Node, ::Val{$(QuoteNode(t))}) = _md_container(io, m, node)
+end
+
+# <details>: a block container that skips the <summary> toggle label
 function _md(io, m, node::Node, ::Val{:details})
+    _md_container_start(io)
     for c in children(node)
         c isa Node && tag(c) === :summary && continue
-        show(io, m, c)
+        _md_child(io, m, c)
     end
+    _md_container_end(io)
 end
 
 # Semantic blocks: emit a leading `---` divider so an agent reader can see
@@ -514,7 +564,7 @@ _md(io, m, node::Node, ::Val{:table}) = _table_to_markdown(io, node)
 
 # <title> → top-level heading (so a full page with <head><title>X</title></head> renders as "# X")
 _md(io, m, node::Node, ::Val{:title}) =
-    (_md_block_start(io); _md_open(io, "# "); _md_recurse(io, m, node); println(io))
+    (_md_block_start(io); _md_open(io, "# "); _md_inline_recurse(io, m, node); println(io))
 
 # <blockquote> → "> "-prefixed lines
 function _md(io, m, node::Node, ::Val{:blockquote})
@@ -546,8 +596,10 @@ end
 # around identified child figures.  Children are recursed with blank-line
 # separation (required for Quarto subfigures).  <figcaption> is moved
 # to the final paragraph — Quarto treats the last block inside a
-# `::: {#fig-…}` div as the displayed caption.  Nested <figure> nodes
-# recurse into their own `:::` blocks (Quarto subfigures).
+# `::: {#fig-…}` div as the displayed caption — and its block containers
+# stay transparent there, so a caption laid out in divs is still that one
+# paragraph.  Nested <figure> nodes recurse into their own `:::` blocks
+# (Quarto subfigures).
 function _md(io, m, node::Node, ::Val{:figure})
     a = attrs(node)
     id = get(a, :id, nothing)
@@ -566,11 +618,11 @@ function _md(io, m, node::Node, ::Val{:figure})
     println(io)
     for (i, c) in enumerate(content)
         i > 1 && println(io)
-        show(io, m, c)
+        _md_child(io, m, c)
     end
     if !isnothing(caption_node)
         println(io)
-        _md_recurse(io, m, caption_node)
+        _md_inline_recurse(io, m, caption_node)
         println(io)
     end
     println(io, ":::")
@@ -592,10 +644,11 @@ _push_tr!(rows, r::Node) = string(tag(r)) == "tr" && push!(rows, r)
 # A table row is one line: a cell renders `<br>` as inline HTML (see `_md` for
 # `:br`), folds any other line break (block content, multi-line text) into
 # `<br>`, and escapes `|` so it cannot split the cell, including inside code.
+# The cell's children share one stream, so blocks among them are delimited.
 _push_cell_text!(cells, ::Any) = nothing
 function _push_cell_text!(cells, c::Node)
     buf = IOBuffer()
-    _md_recurse(IOContext(buf, :md_table_cell => true), _md_mime, c)
+    _md_recurse(_MDStream(IOContext(buf, :md_table_cell => true)), _md_mime, c)
     text = replace(strip(String(take!(buf))), r"\s*\n\s*" => "<br>")
     push!(cells, replace(text, "|" => "\\|"))
 end
