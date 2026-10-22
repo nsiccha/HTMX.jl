@@ -235,7 +235,17 @@ print(sprint(show, MIME"text/markdown"(), node))
 a paragraph
 ```
 
-The `---` divider before `<article>`/`<section>` is intentional: it gives a Markdown reader a clear seam between semantic blocks. Every block element starts on its own line: inline text before it inside a transparent container (`h.div("lead", h.h2("x"))`) is closed as a paragraph, and content after a list item starts after a blank line. Conversion table:
+The `---` divider before `<article>`/`<section>` is intentional: it gives a Markdown reader a clear seam between semantic blocks. Every block element starts on its own line: inline text before it inside a container (`h.div("lead", h.h2("x"))`) is closed as a paragraph, and content after a list item starts after a blank line.
+
+A block container (`div`, `nav`, `dl`, …) is a paragraph boundary, as in HTML: `h.div(h.div("one"), h.div("two"))` renders `"one\n\ntwo"`, not `"onetwo"`. It adds no blank line at the end of the output. Inside content that must stay one paragraph — the text of a link or other inline element, a heading, a figure caption — containers stay transparent, so `h.a(h.div("card"), h.div("sub"))` is still one link.
+
+A child that is not a `Node` is written with its own `show(io, MIME"text/markdown"(), x)` and spliced into the running line. If its HTML is a block element, declare it so its siblings do not run into it:
+
+```julia
+HTMX.markdown_block(::MyCard) = true   # delimited like a div
+```
+
+Conversion table:
 
 | HTML tag                          | Markdown                  |
 |-----------------------------------|---------------------------|
@@ -253,7 +263,8 @@ The `---` divider before `<article>`/`<section>` is intentional: it gives a Mark
 | `title`                           | `# `                      |
 | `hr`                              | `---`                     |
 | `script`, `style`, `meta`, `link` | skipped                   |
-| Containers (`div`, `main`, `body`, `html`, `head`, `span`, `details`, `summary`, `form`, `label`, `nav`, `footer`, `dl`) | recurse transparently |
+| Block containers (`div`, `main`, `body`, `html`, `form`, `nav`, `footer`, `aside`, `address`, `fieldset`, `hgroup`, `dialog`, `dl`, `dt`, `dd`, `details`) | recurse as a paragraph boundary (`details` without its `summary`) |
+| Other containers (`span`, `label`, `summary`, `head`) | recurse transparently |
 
 Unknown tags fall through transparently — their text content is printed.
 
