@@ -420,10 +420,47 @@ blank line.
 end
 
 """
-A `br` inside a paragraph renders as a hard newline in the Markdown output.
+A `br` is a Markdown hard line break, a `\\` ending the line, which Pandoc,
+CommonMark/GFM and Julia `Markdown` all read as a line break (a bare newline
+is a soft break, which they join with a space). It is written with the content
+after it: a `br` that ends its paragraph or block shows nothing in HTML and
+writes nothing, an inline closer (`**`, `](…)`) stays on the broken line, a
+code span is closed around the break, and in a heading, which is one line, it
+is a space. `md_to_node` reads the break back as a `br`.
 """
-@testitem "markdown - br renders a newline" setup=[HTMXTestHelpers] tags=[:unit, :markdown] begin
-    @test to_md(h.p("a", h.br(), "b")) == "a\nb\n\n"
+@testitem "markdown - br is a hard line break" setup=[HTMXTestHelpers] tags=[:unit, :markdown] begin
+    @test to_md(h.p("Zeile eins", h.br(), "Zeile zwei")) == "Zeile eins\\\nZeile zwei\n\n"
+    @test to_md(h.p("a", h.br(), h.br(), "b")) == "a\\\n\\\nb\n\n"
+    @test to_md(h.p(h.br(), "a")) == "\\\na\n\n"
+    @test to_md(h.div("a", h.br(), "b")) == "a\\\nb"
+    @test to_md(h.ul(h.li("a", h.br(), "b"), h.li("c"))) == "- a\\\nb\n- c\n"
+    @test to_md(h.blockquote("a", h.br(), "b")) == "> a\\\n> b\n\n"
+    @test to_md(h.p("a", h.br(), "\nb")) == "a\\\nb\n\n"
+    # a break that ends its paragraph, item or block writes nothing
+    @test to_md(h.p("l1", h.br(), "l2", h.br())) == "l1\\\nl2\n\n"
+    @test to_md(h.ul(h.li("a", h.br()), h.li("b"))) == "- a\n- b\n"
+    @test to_md(h.div(h.div("a", h.br()), "b")) == "a\n\nb"
+    @test to_md(h.div("a", h.br(), h.p("b"))) == "a\n\nb\n\n"
+    @test to_md(h.span("a", h.br())) == "a"
+    # inline closers stay on the broken line; a code span closes around it
+    @test to_md(h.p(h.strong("a", h.br(), "b"))) == "**a\\\nb**\n\n"
+    @test to_md(h.p(h.strong("a", h.br()), "b")) == "**a**\\\nb\n\n"
+    @test to_md(h.p(h.em("a", h.br()), "b")) == "*a*\\\nb\n\n"
+    @test to_md(h.p(h.a("a", h.br(); href="/x"), "b")) == "[a](/x)\\\nb\n\n"
+    @test to_md(h.p(h.code("a", h.br(), "b"))) == "`a`\\\n`b`\n\n"
+    @test to_md(h.p("a", h.span("x", h.br(); lang="en"), "b")) == "a[x]{lang=\"en\"}\\\nb\n\n"
+    # a heading is one line
+    @test to_md(h.h2("a", h.br(), "b")) == "## a b\n"
+    @test to_md(h.title("a", h.br(), "b")) == "# a b\n"
+    @test to_md(h.header("a", h.br(), "b")) == "### a b\n"
+    @test to_md(h.div(h.h2("a", h.br(); id="t"), h.a("x"; href="#t"))) == "## a {#t}\n[x](#t)"
+    # a <pre> body keeps it verbatim
+    @test to_md(h.pre(h.code("x", h.br(), "y"))) == "```\nx\ny\n```\n"
+    # read back
+    @test html(md_to_node("Zeile eins\\\nZeile zwei")) == "<div><p>Zeile eins<br>Zeile zwei</p></div>"
+    for n in (h.p("a", h.br(), "b"), h.p("a", h.br(), h.br(), "b"))
+        @test to_md(md_to_node(to_md(n))) == to_md(n)
+    end
 end
 
 """
@@ -503,8 +540,8 @@ end
 """
 Every table row stays one Markdown line: a `br` in a cell renders as inline
 `<br>`, any other line break in the cell's content (block children,
-multi-line text) folds into `<br>`, and `|` is escaped as `\\|`, also inside
-code spans. Outside a table, `br` is still a newline.
+multi-line text, a hard line break) folds into `<br>`, and `|` is escaped as
+`\\|`, also inside code spans. Outside a table, `br` is a hard line break.
 """
 @testitem "markdown - table cells stay on one row" setup=[HTMXTestHelpers] tags=[:unit, :markdown] begin
     @test to_md(h.table(h.tr(h.th("Source | files")),
@@ -515,7 +552,8 @@ code spans. Outside a table, `br` is still a newline.
     @test to_md(h.table(h.tr(h.td(h.p("one"), h.p("two")), h.td("multi\nline"),
         h.td(h.ul(h.li("i"), h.li("j")))))) ==
         "| one<br>two | multi<br>line | - i<br>- j |\n| --- | --- | --- |\n\n"
-    @test to_md(h.p("a", h.br(), "b")) == "a\nb\n\n"
+    @test to_md(h.table(h.tr(h.td(h.blockquote("a", h.br(), "b"))))) == "| > a<br>> b |\n| --- |\n\n"
+    @test to_md(h.p("a", h.br(), "b")) == "a\\\nb\n\n"
 end
 
 """
