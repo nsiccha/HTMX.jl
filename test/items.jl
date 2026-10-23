@@ -800,6 +800,31 @@ caption, which Quarto reads as the figure div's last paragraph.
 end
 
 """
+An `<a>` without `href`, such as an htmx-only `h.a("x"; hx_get=…)`, is no
+hyperlink: HTML has it represent its contents. Its Markdown is that content,
+written like a `span` (block children stay blocks, a linked id is still
+anchored), never the empty link `[x]()` that Pandoc's Typst writer turns into
+`#link("")`, which Typst refuses. An explicit `href=""` links to the current
+document and stays a link.
+"""
+@testitem "markdown - an a without href renders its content" setup=[HTMXTestHelpers] tags=[:unit, :markdown] begin
+    @test to_md(h.p("Länder: ", h.a("Bayern"; hx_get="/region/09", hx_target="#x"), " · ",
+                    h.a("Berlin"; href="/region/11"))) == "Länder: Bayern · [Berlin](/region/11)\n\n"
+    @test to_md(h.a("x"; href=nothing)) == "x"
+    @test to_md(h.a("x"; href=false)) == "x"
+    @test to_md(h.a(hx_get="/")) == ""
+    @test to_md(h.a("z"; href="")) == "[z]()"
+    @test to_md(h.a(h.strong("b"); hx_get="/")) == "**b**"
+    @test to_md(h.div(h.a(h.div("card"), h.div("sub"); hx_get="/c"), "after")) == "card\n\nsub\n\nafter"
+    @test to_md(h.h2(h.a("T"; hx_get="/"))) == "## T\n"
+    @test to_md(h.header(h.a("Home"; hx_get="/"))) == "### Home\n"
+    @test to_md(h.ul(h.li(h.a("one"; hx_get="/1")), h.li(h.a("two"; hx_get="/2")))) == "- one\n- two\n"
+    @test to_md(h.table(h.tr(h.th("a")), h.tr(h.td(h.a("x"; hx_get="/"))))) == "| a |\n| --- |\n| x |\n\n"
+    @test to_md(h.p(h.a(lang="en")("word"))) == "[word]{lang=\"en\"}\n\n"
+    @test to_md(h.div(h.a("go"; href="#t"), h.p(h.a(id="t")("target")))) == "[go](#t)\n\n[]{#t}target\n\n"
+end
+
+"""
 A non-`Node` child is spliced into the running line unless its type declares
 `HTMX.markdown_block`, which delimits it like a `div` among a node's children
 or a vector's elements; inside a link it stays inline.

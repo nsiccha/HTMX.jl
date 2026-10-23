@@ -665,8 +665,14 @@ for t in (:em, :i)
 end
 _md(io, m, node::Node, ::Val{:code}) =
     (_md_open(io, "`"); _md_inline_recurse(io, m, node); print(io, "`"))
-_md(io, m, node::Node, ::Val{:a}) =
-    (_md_open(io, "["); _md_inline_recurse(io, m, node); print(io, "](", get(attrs(node), :href, ""), ")"))
+# An `<a>` without `href` (an htmx-only `h.a("x"; hx_get=…)`) is no link: HTML
+# has it represent its contents, so it renders them like a `span` would, never
+# as the empty link `[x]()`. `href=""` stays a link to the current document.
+function _md(io, m, node::Node, ::Val{:a})
+    href = get(attrs(node), :href, nothing)
+    (href === nothing || href === false) && return _md_recurse(io, m, node)
+    _md_open(io, "["); _md_inline_recurse(io, m, node); print(io, "](", href, ")")
+end
 # Inside a table cell a newline would end the row, so the break stays inline HTML.
 _md(io, m, node::Node, ::Val{:br}) = print(io, get(io, :md_table_cell, false) ? "<br>" : "\n")
 
