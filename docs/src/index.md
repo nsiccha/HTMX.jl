@@ -20,6 +20,7 @@ h.div(class="card")(h.h1("Hello"), h.p("world"))      # build nodes
 h.button(hx_get="/click", hx_target="#out")("Go")     # HTMX attributes (underscore→hyphen)
 h.input(type="checkbox", checked=true, disabled=false) # nothing/false omitted; true → checked="true"
 h.ul([h.li(x) for x in items])                        # vector children are flattened (no `...` needed)
+h.p("Total", done ? h.small(" (final)") : nothing)    # a `nothing` child is dropped
 
 h.button(_"on click toggle .open on #menu")("Menu")  # Hyperscript snippet → `_` attribute
 
@@ -69,6 +70,17 @@ h.ul([h.li(it) for it in items])
 ```
 ```html
 <ul><li>apple</li><li>banana</li><li>cherry</li></ul>
+```
+
+A `nothing` child, or a `nothing` element of a vector argument, is dropped, the
+same way a `nothing` attribute is omitted. So an optional child is written the
+usual Julia way, and the HTML, Markdown and HXML output carry no trace of it:
+
+```julia
+h.div("Offers close", late ? h.strong(" (no bid from us)") : nothing)
+```
+```html
+<div>Offers close</div>
 ```
 
 Calling an existing node returns a **new** node with the additional children/attributes — the original is unchanged:
