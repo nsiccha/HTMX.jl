@@ -1092,3 +1092,38 @@ A view groups only bare inline text. Children that emit their own Hyperview
         h.span(class="kv-value")("v"),
     )))
 end
+
+"""
+A non-`Node` child of a view is placed by its own HXML output: a wrapper that
+writes a node's HXML sits exactly where that node would, instead of inside an
+anonymous `<text>` run; text-valued children (numbers, `Raw`, text-only
+wrappers) still join the run, and a value that writes nothing leaves no trace.
+"""
+@testitem "hxml - foreign view children are placed by their output" setup=[HTMXTestHelpers] tags=[:unit, :hxml, :layout] begin
+    struct Forward
+        node::Node
+    end
+    Base.show(io::IO, m::MIME"application/vnd.hyperview+xml", w::Forward) = show(io, m, w.node)
+    struct Silent end
+    Base.show(::IO, ::MIME"application/vnd.hyperview+xml", ::Silent) = nothing
+    struct Gap end
+    Base.show(io::IO, ::MIME"application/vnd.hyperview+xml", ::Gap) = print(io, " ")
+    row(id) = h.tr(h.td(id); id)
+
+    @test hxml(h.tbody(row("a"), Forward(row("b")))) == hxml(h.tbody(row("a"), row("b"))) ==
+        "<view style=\"tbody\"><view id=\"a\" style=\"tr\"><view style=\"td\"><text>a</text></view></view>" *
+        "<view id=\"b\" style=\"tr\"><view style=\"td\"><text>b</text></view></view></view>"
+    @test hxml(h.div(Forward(h.span("k")), h.span("v"))) == hxml(h.div(h.span("k"), h.span("v")))
+    @test hxml(h.div("lead ", Forward(h.div("card")), " tail")) ==
+        "<view style=\"div\"><text>lead </text><view style=\"div\"><text>card</text></view><text> tail</text></view>"
+    # text-valued children keep joining the run
+    @test hxml(h.div("n=", 3, " items")) == "<view style=\"div\"><text>n=3 items</text></view>"
+    @test hxml(h.div("x", Raw("<b>y</b>"))) == "<view style=\"div\"><text>x&lt;b&gt;y&lt;/b&gt;</text></view>"
+    @test hxml(h.div("a ", Forward(h.time("t")), " b")) == "<view style=\"div\"><text>a t b</text></view>"
+    @test hxml(h.div("a", Gap(), "b")) == "<view style=\"div\"><text>a b</text></view>"
+    # empty output writes nothing, not even an empty run
+    @test hxml(h.div("a", Silent(), "b")) == "<view style=\"div\"><text>ab</text></view>"
+    @test hxml(h.tr(h.td("x"), Silent())) == "<view style=\"tr\"><view style=\"td\"><text>x</text></view></view>"
+    @test well_formed_xml(hxml(h.tbody(row("a"), Forward(row("b")))))
+    @test well_formed_xml(hxml(h.div("lead ", Forward(h.div("card")), " tail")))
+end
