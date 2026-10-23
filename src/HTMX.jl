@@ -78,10 +78,25 @@ macro __str(ex)
     :($HyperscriptString($(esc(Meta.parse("\"$ex\"")))))
 end
 _push_flat!(out, a::AbstractVector) = append!(out, a)
+# A vector that can hold `nothing`: append it, then close the gaps in the
+# appended tail in place (`out` is `_flatten`'s own fresh buffer).
+function _push_flat!(out, a::AbstractVector{>:Nothing})
+    n = length(out)
+    append!(out, a)
+    for i in n+1:length(out)
+        c = out[i]
+        isnothing(c) || (out[n += 1] = c)
+    end
+    resize!(out, n)
+end
 _push_flat!(out, a) = push!(out, a)
+_push_flat!(out, ::Nothing) = out
 # Flatten one level of positional children in linear time: a vector argument
 # splices its elements in order, anything else becomes one child. (Folding
-# `vcat` across the arguments instead is quadratic in the child count.)
+# `vcat` across the arguments instead is quadratic in the child count.) A
+# `nothing` child, or a `nothing` element of a vector, is no child at all, as a
+# `nothing` attribute is no attribute: `cond ? h.p("x") : nothing` leaves the
+# paragraph out instead of writing the text "nothing".
 function _flatten(args)
     out = Any[]
     for a in args
@@ -174,7 +189,9 @@ converted to hyphens, e.g. `hx_get` → `hx-get`). Attributes set to `nothing` o
 `false` are omitted; `true` renders as `name="true"` (browsers treat the quoted
 value as truthy). Positional arguments become children. An `AbstractVector`
 argument is flattened one level: its elements become children in order, so a
-long child list can be passed as one vector instead of splatted.
+long child list can be passed as one vector instead of splatted. A `nothing`
+child (or vector element) is dropped, as a `nothing` attribute is, so an
+optional child is written `cond ? h.p("x") : nothing`.
 
 Use call syntax to append children or merge attributes:
 
@@ -297,8 +314,10 @@ standard way to build elements:
 Keyword arguments become attributes (underscores → hyphens). Positional arguments
 become children. An `AbstractVector` argument is flattened one level: its
 elements become children in order, so a long child list can be passed as one
-vector instead of splatted. Attributes set to `nothing` or `false` are omitted;
-`true` renders as `name="true"` (browsers treat the quoted value as truthy).
+vector instead of splatted. A `nothing` child (or vector element) is dropped,
+so `cond ? h.p("x") : nothing` writes the paragraph or nothing. Attributes set
+to `nothing` or `false` are omitted; `true` renders as `name="true"` (browsers
+treat the quoted value as truthy).
 """
 h(tag, args...; kwargs...) = Node(tag, args...; kwargs...)
 Base.getproperty(::typeof(h), tag::Symbol) = (args...; kwargs...)->h(tag, args...; kwargs...)
