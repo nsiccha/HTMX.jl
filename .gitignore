@@ -1,4 +1,6 @@
 Manifest.toml
+!web/Manifest.toml
+!web/app/Manifest.toml
 CLAUDE.md
 
 # Auto-generated HTMXObjects recording outputs — not committed to main
