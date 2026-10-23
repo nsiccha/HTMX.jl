@@ -1052,15 +1052,14 @@ end
 # --- element emit helpers ---
 
 # Does this view child need to be grouped into an anonymous <text> run? A <view>
-# may not hold bare text directly (Hyperview rejects it), so any child that
-# serializes to BARE TEXT — a raw String, an arbitrary value, or a transparent
-# tag like <time>/<abbr> that recurses to bare text — must be wrapped. A child
-# that EMITS ITS OWN element (a <view>/<text>/<image>/…) is already valid inside
-# the <view> and emits as-is, becoming its own flex child. `true` ⟹ wrap/group.
-_hxml_inline(::HyperscriptString) = false
+# may not hold bare text directly (Hyperview does not render it), so any child
+# that serializes to BARE TEXT — a raw String, or a transparent tag like
+# <time>/<abbr> that recurses to bare text — must be wrapped. A child that EMITS
+# ITS OWN element (a <view>/<text>/<image>/…) is already valid inside the <view>
+# and emits as-is, becoming its own flex child. `true` ⟹ wrap/group. Any other
+# value is placed by its own output instead (see `_hxml_view_child`).
 _hxml_inline(::AbstractString) = true
 _hxml_inline(n::Node) = _hxml_tag_inline(Val(tag(n)))
-_hxml_inline(_) = true
 # Unknown tags default to `true` (wrap): an unrecognised inline text tag (time,
 # cite, q, …) recurses to bare text, so grouping keeps that text out of the
 # <view>. Every tag whose _hxml method emits its OWN element is marked `false`
@@ -1090,23 +1089,38 @@ _hxml_tag_inline(::Val{:behavior}) = false
 
 # Emit children into a VIEW context: consecutive inline children are grouped
 # into a single <text> run; standalone (block) children emit directly. This is
-# what keeps bare text out of <view> (which Hyperview rejects).
+# what keeps bare text out of <view> (which Hyperview does not render).
 function _hxml_view_children(io, m, node)
-    inline_open = false
+    run = false
     for c in children(node)
-        c isa HyperscriptString && continue
-        if _hxml_inline(c)
-            inline_open || print(io, "<text>")
-            inline_open = true
-            show(io, m, c)
-        else
-            inline_open && print(io, "</text>")
-            inline_open = false
-            show(io, m, c)
-        end
+        run = _hxml_view_child(io, m, c, run)
     end
-    inline_open && print(io, "</text>")
+    run && print(io, "</text>")
 end
+
+# Write one view child. `run` says whether a <text> run is open before it; the
+# result says whether one is open after it.
+_hxml_view_child(io, m, ::HyperscriptString, run) = run
+_hxml_view_child(io, m, c::Union{AbstractString,Node}, run) =
+    (run = _hxml_run(io, run, _hxml_inline(c)); show(io, m, c); run)
+# Any other value (an app's wrapper type, a number, `Raw`) is placed by its own
+# output, so a wrapper that writes a Node's HXML sits exactly where that Node
+# would. Text output is XML-escaped and never holds a literal `<`, so output
+# that starts with `<` and ends with `>` is markup and emits directly; anything
+# else is text and joins the run. Empty output writes nothing and leaves the run
+# as it was.
+function _hxml_view_child(io, m, c, run)
+    s = sprint(show, m, c; context=io)
+    isempty(s) && return run
+    run = _hxml_run(io, run, !_hxml_markup(strip(s)))
+    print(io, s)
+    run
+end
+_hxml_markup(s) = startswith(s, '<') && endswith(s, '>')
+# Open or close the <text> run so that it is open exactly when the next child
+# is inline; returns the new state.
+_hxml_run(io, run, inline) =
+    (run == inline || print(io, inline ? "<text>" : "</text>"); inline)
 
 # Print the style="…" attribute: the tag-derived style id (or nothing) followed
 # by any `class` tokens, space-joined. Emits nothing when both are absent.
