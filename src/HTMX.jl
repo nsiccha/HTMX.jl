@@ -665,8 +665,17 @@ for t in (:em, :i)
 end
 _md(io, m, node::Node, ::Val{:code}) =
     (_md_open(io, "`"); _md_inline_recurse(io, m, node); print(io, "`"))
-_md(io, m, node::Node, ::Val{:a}) =
-    (_md_open(io, "["); _md_inline_recurse(io, m, node); print(io, "](", get(attrs(node), :href, ""), ")"))
+# An `<a>` that names no target is no link in Markdown. Without `href` (an
+# htmx-only `h.a("x"; hx_get=…)`) HTML has it represent its contents, and an
+# empty or bare `#` href is the usual placeholder on a script-driven link. It
+# renders its content like a `span` would, never as `[x]()` or `[x](#)`, which
+# Pandoc's Typst writer turns into links Typst refuses.
+_md_no_target(href) = href === nothing || href === false || (href isa AbstractString && href in ("", "#"))
+function _md(io, m, node::Node, ::Val{:a})
+    href = get(attrs(node), :href, nothing)
+    _md_no_target(href) && return _md_recurse(io, m, node)
+    _md_open(io, "["); _md_inline_recurse(io, m, node); print(io, "](", href, ")")
+end
 # Inside a table cell a newline would end the row, so the break stays inline HTML.
 _md(io, m, node::Node, ::Val{:br}) = print(io, get(io, :md_table_cell, false) ? "<br>" : "\n")
 

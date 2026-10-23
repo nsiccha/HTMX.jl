@@ -800,6 +800,37 @@ caption, which Quarto reads as the figure div's last paragraph.
 end
 
 """
+An `<a>` that names no target is no link in Markdown: one without `href`,
+such as an htmx-only `h.a("x"; hx_get=…)`, which HTML has represent its
+contents, and one whose `href` is empty or a bare `#`, the usual placeholder
+on a script-driven link. Its Markdown is that content, written like a `span`
+(block children stay blocks, a linked id is still anchored), never `[x]()` or
+`[x](#)`, which Pandoc's Typst writer turns into `#link("")` and `#link()`,
+both refused by Typst. A real fragment such as `#t` stays a link.
+"""
+@testitem "markdown - an a without a target renders its content" setup=[HTMXTestHelpers] tags=[:unit, :markdown] begin
+    @test to_md(h.p("Länder: ", h.a("Bayern"; hx_get="/region/09", hx_target="#x"), " · ",
+                    h.a("Berlin"; href="/region/11"))) == "Länder: Bayern · [Berlin](/region/11)\n\n"
+    @test to_md(h.a("x"; href=nothing)) == "x"
+    @test to_md(h.a("x"; href=false)) == "x"
+    @test to_md(h.a(hx_get="/")) == ""
+    @test to_md(h.a("z"; href="")) == "z"
+    @test to_md(h.p("Länder: ", h.a("Hessen"; href="#", hx_get="/region/06", onclick="event.preventDefault()"),
+                    " · ", h.a("Nach oben"; href="#"))) == "Länder: Hessen · Nach oben\n\n"
+    @test to_md(h.a(h.div("card"); href="#")) == "card"
+    @test to_md(h.a("x"; href="#t")) == "[x](#t)"
+    @test to_md(h.a("x"; href="/")) == "[x](/)"
+    @test to_md(h.a(h.strong("b"); hx_get="/")) == "**b**"
+    @test to_md(h.div(h.a(h.div("card"), h.div("sub"); hx_get="/c"), "after")) == "card\n\nsub\n\nafter"
+    @test to_md(h.h2(h.a("T"; hx_get="/"))) == "## T\n"
+    @test to_md(h.header(h.a("Home"; hx_get="/"))) == "### Home\n"
+    @test to_md(h.ul(h.li(h.a("one"; hx_get="/1")), h.li(h.a("two"; hx_get="/2")))) == "- one\n- two\n"
+    @test to_md(h.table(h.tr(h.th("a")), h.tr(h.td(h.a("x"; hx_get="/"))))) == "| a |\n| --- |\n| x |\n\n"
+    @test to_md(h.p(h.a(lang="en")("word"))) == "[word]{lang=\"en\"}\n\n"
+    @test to_md(h.div(h.a("go"; href="#t"), h.p(h.a(id="t")("target")))) == "[go](#t)\n\n[]{#t}target\n\n"
+end
+
+"""
 A non-`Node` child is spliced into the running line unless its type declares
 `HTMX.markdown_block`, which delimits it like a `div` among a node's children
 or a vector's elements; inside a link it stays inline.
@@ -942,7 +973,7 @@ from the Markdown of a non-`Node` child. A `<pre>` body writes no ids.
     @test to_md(h.div(LinkThing(), target)) == "[go](#t)\n\n" * written
     # only the ids that are linked; other pages' fragments and `#` are not in-page links
     @test to_md(h.div(go, h.p(id="u")("y"))) == "[go](#t)\n\ny\n\n"
-    @test to_md(h.div(h.a("x"; href="/p#t"), h.a("y"; href="#"), target)) == "[x](/p#t)[y](#)\n\nx\n\n"
+    @test to_md(h.div(h.a("x"; href="/p#t"), h.a("y"; href="#"), target)) == "[x](/p#t)y\n\nx\n\n"
     @test to_md(h.div(go, h.pre(h.code(h.span(id="t")("x = 1"))))) == "[go](#t)\n\n```\nx = 1\n```\n"
 end
 

@@ -265,7 +265,7 @@ Conversion table:
 | `table` + `thead`/`tbody`/`tr`    | pipe-style Markdown table |
 | `img`                             | `![](src){alt="…"}`, inline |
 | `figure` + `figcaption`           | `::: {#id}` fenced div, caption last |
-| `a`                               | `[text](href)`            |
+| `a`                               | `[text](href)`; without a target (no `href`, as on an htmx-only `h.a("x"; hx_get=…)`, or `href=""`/`"#"`) just its content, like a `span` |
 | `strong`/`b`, `em`/`i`, `code`    | `**…**`, `*…*`, `` `…` `` |
 | `article`, `section`              | wrapped in `---` dividers |
 | `header`                          | `### ` when inline-only; its own blocks (heading, nav, …) unprefixed |
