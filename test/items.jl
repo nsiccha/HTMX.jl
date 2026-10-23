@@ -918,6 +918,124 @@ nothing; a `<pre>` body stays verbatim.
     @test to_md(h.pre(h.code(h.span(lang="en")("x = 1")))) == "```\nx = 1\n```\n"
 end
 
+"""
+An element's `id` is written only when an in-page link of the same document
+points at it, so Markdown without in-page links, and every id that only names
+an hx-swap target, stays as it was. The link can come before or after its
+target, from an `<a href>` anywhere in the rendered value, from a string, or
+from the Markdown of a non-`Node` child. A `<pre>` body writes no ids.
+"""
+@testitem "markdown - only ids that in-page links point at are written" setup=[HTMXTestHelpers] tags=[:unit, :markdown] begin
+    struct LinkThing end
+    Base.show(io::IO, ::MIME"text/markdown", ::LinkThing) = print(io, "[go](#t)")
+    target = h.div(id="t")(h.p("x"))
+    written = "::: {#t}\n\nx\n\n:::\n\n"
+    go = h.a("go"; href="#t")
+
+    @test to_md(target) == "x\n\n"
+    @test to_md(h.div(h.table(h.tr(h.th("k")), h.tr(id="row-1")(h.td("a"))), h.div(id="detail-slot-1")("b"))) ==
+        "| k |\n| --- |\n| a |\n\nb"
+    @test to_md(h.div(h.p(go), target)) == "[go](#t)\n\n" * written
+    @test to_md(h.div(target, h.p(go))) == written * "[go](#t)\n\n"
+    @test to_md([h.p(go), target]) == "[go](#t)\n\n" * written
+    @test to_md(h.div("see [go](#t)", target)) == "see [go](#t)\n\n" * written
+    @test to_md(h.div(LinkThing(), target)) == "[go](#t)\n\n" * written
+    # only the ids that are linked; other pages' fragments and `#` are not in-page links
+    @test to_md(h.div(go, h.p(id="u")("y"))) == "[go](#t)\n\ny\n\n"
+    @test to_md(h.div(h.a("x"; href="/p#t"), h.a("y"; href="#"), target)) == "[x](/p#t)[y](#)\n\nx\n\n"
+    @test to_md(h.div(go, h.pre(h.code(h.span(id="t")("x = 1"))))) == "[go](#t)\n\n```\nx = 1\n```\n"
+end
+
+"""
+A linked id is written where Pandoc keeps it as a label for Quarto's Typst
+output, which stops on a link to a missing label. A block element is a fenced
+div `::: {#id}`, carrying its language in the same attribute block. A heading
+writes `{#id}` on its line. Anything else (inline content, an image, a list
+item, a caption, an element with no Markdown of its own, and a block where a
+fence would break the line) gets an empty anchor span `[]{#id}` in front of it:
+Pandoc's Typst writer drops an image's own id, and Typst keeps one label per
+position, so two anchors in a row are kept apart by a zero-width space. An id
+the `#` shorthand cannot spell is written `id="…"`.
+"""
+@testitem "markdown - a linked id is written as a Pandoc identifier" setup=[HTMXTestHelpers] tags=[:unit, :markdown] begin
+    go = h.a("go"; href="#t")
+    linked(x) = to_md(h.div(go, x))
+
+    @test linked(h.p(id="t")("x")) == "[go](#t)\n\n::: {#t}\n\nx\n\n:::\n\n"
+    @test linked(h.div(id="t", lang="en")(h.p("x"))) == "[go](#t)\n\n::: {#t lang=\"en\"}\n\nx\n\n:::\n\n"
+    @test linked(h.pre(id="t")(h.code("x = 1"))) == "[go](#t)\n\n::: {#t}\n\n```\nx = 1\n```\n:::\n\n"
+    @test linked(h.blockquote(h.p(id="t")("x"))) == "[go](#t)\n\n> ::: {#t}\n> \n> x\n> \n> :::\n\n"
+    # a header holding a linked block still renders its blocks unprefixed
+    @test linked(h.header(h.span("Label"), h.div(id="t")("x"))) == "[go](#t)\n\nLabel\n\n::: {#t}\n\nx\n\n:::\n\n"
+
+    @test linked(h.h2(id="t")("Title")) == "[go](#t)\n\n## Title {#t}\n"
+    @test linked(h.h2(id="t", lang="en")("Title")) == "[go](#t)\n\n::: {lang=\"en\"}\n\n## Title {#t}\n:::\n\n"
+    @test linked(h.ul(h.li(h.h2(id="t")("Title")))) == "[go](#t)\n\n- ## Title {#t}\n\n"
+    @test linked(h.ul(h.li(h.h2(id="t", lang="en")("Title")))) == "[go](#t)\n\n- []{#t}[## Title]{lang=\"en\"}\n"
+    @test to_md(h.div(h.a("a"; href="#a/b"), h.h2(id="a/b")("Drei"))) == "[a](#a/b)\n\n## Drei {id=\"a/b\"}\n"
+    @test to_md(h.div(h.a("a"; href="#ü-1.x:y"), h.h2(id="ü-1.x:y")("Ü"))) == "[a](#ü-1.x:y)\n\n## Ü {#ü-1.x:y}\n"
+
+    @test to_md(h.p(go, " Text ", h.span(id="t")("Wort"), " mehr")) == "[go](#t) Text []{#t}Wort mehr\n\n"
+    @test to_md(h.p(go, " ", h.span(id="t", lang="en")("word"))) == "[go](#t) []{#t}[word]{lang=\"en\"}\n\n"
+    @test to_md(h.p(go, " ", h.img(id="t", src="/a.png", alt="A"))) == "[go](#t) []{#t}![](/a.png){alt=\"A\"}\n\n"
+    @test to_md(h.p(go, h.span(id="t")())) == "[go](#t)[]{#t}\n\n"
+    @test to_md(h.p(go, h.a("u"; href="#u"), h.span(id="t")(h.span(id="u")("x")))) ==
+        "[go](#t)[u](#u)[]{#t}\u200b[]{#u}x\n\n"
+    @test linked(h.hr(id="t")) == "[go](#t)[]{#t}\n\n---\n"
+    @test linked(h.ul(h.li(id="t")("item"))) == "[go](#t)\n\n- []{#t}item\n"
+    @test linked(h.ul(h.li(id="t", lang="en")("item"))) == "[go](#t)\n\n- []{#t}[item]{lang=\"en\"}\n"
+    @test linked(h.ul(h.li(h.div(id="t")(h.p("a"))))) == "[go](#t)\n\n- []{#t}a\n\n\n"
+    @test linked(h.figure(id="fig-r")(h.img(src="/a.png", alt="A"), h.figcaption(id="t")("Radon"))) ==
+        "[go](#t)\n\n::: {#fig-r}\n\n![](/a.png){alt=\"A\"}\n\n[]{#t}Radon\n:::\n\n"
+end
+
+"""
+A section's (or article's) id goes on the heading that opens it,
+`## Eins {#id}`, which is Pandoc's own model of a section; Pandoc writes it back
+as `<section id>`. A section that does not open with a heading, or whose heading
+writes a linked id of its own, is a fenced div instead.
+"""
+@testitem "markdown - a linked section id goes on its opening heading" setup=[HTMXTestHelpers] tags=[:unit, :markdown] begin
+    go = h.a("go"; href="#t")
+    linked(x) = to_md(h.div(go, x))
+    @test to_md(h.article(h.section(id="t")(h.h2("Eins"), h.p("Text")), h.p(h.a("zu Eins"; href="#t")))) ==
+        "\n---\n\n\n---\n\n## Eins {#t}\nText\n\n\n[zu Eins](#t)\n\n\n"
+    @test linked(h.article(id="t")(h.h1("Eins"))) == "[go](#t)\n\n---\n\n# Eins {#t}\n\n"
+    # the heading's own id, when nothing links to it, gives way
+    @test linked(h.section(id="t")(h.h2(id="h")("Eins"))) == "[go](#t)\n\n---\n\n## Eins {#t}\n\n"
+    @test linked(h.section(id="t", lang="en")(h.h2("One"))) ==
+        "[go](#t)\n\n::: {lang=\"en\"}\n\n\n---\n\n## One {#t}\n\n:::\n\n"
+    @test linked(h.section(id="t")(h.p("Text"), h.h2("Später"))) ==
+        "[go](#t)\n\n::: {#t}\n\n\n---\n\nText\n\n## Später\n\n:::\n\n"
+    @test to_md(h.div(go, h.a("h"; href="#h"), h.section(id="t")(h.h2(id="h")("Eins")))) ==
+        "[go](#t)[h](#h)\n\n::: {#t}\n\n\n---\n\n## Eins {#h}\n\n:::\n\n"
+end
+
+"""
+In a pipe table a linked id is an anchor at the start of a cell: a cell's own,
+and a row's or table section's at its first cell. An id that no cell follows is
+an anchor after the table. A linked table is a fenced div, which Quarto numbers
+as a table when its id starts with `tbl-`.
+"""
+@testitem "markdown - linked ids in tables" setup=[HTMXTestHelpers] tags=[:unit, :markdown, :tables] begin
+    go = h.a("go"; href="#t")
+    linked(x) = to_md(h.div(go, x))
+    @test linked(h.table(h.tr(h.th("a")), h.tr(h.td(id="t")("x")))) == "[go](#t)\n\n| a |\n| --- |\n| []{#t}x |\n\n"
+    @test linked(h.table(h.tr(h.th("a"), h.th("b")), h.tr(id="t")(h.td("x"), h.td("y")))) ==
+        "[go](#t)\n\n| a | b |\n| --- | --- |\n| []{#t}x | y |\n\n"
+    @test linked(h.table(h.thead(h.tr(h.th("a"))), h.tbody(id="t")(h.tr(h.td("x"))))) ==
+        "[go](#t)\n\n| a |\n| --- |\n| []{#t}x |\n\n"
+    @test to_md(h.div(go, h.a("u"; href="#u"), h.table(h.tr(h.th("a")), h.tr(id="t")(h.td(id="u")("x"))))) ==
+        "[go](#t)[u](#u)\n\n| a |\n| --- |\n| []{#t}\u200b[]{#u}x |\n\n"
+    @test linked(h.table(h.tr(h.th("a")), h.tr(h.td(id="t", lang="en")("x")))) ==
+        "[go](#t)\n\n| a |\n| --- |\n| []{#t}[x]{lang=\"en\"} |\n\n"
+    @test to_md(h.div(h.a("p"; href="#a|b"), h.table(h.tr(h.th("a")), h.tr(h.td(id="a|b")("x"))))) ==
+        "[p](#a|b)\n\n| a |\n| --- |\n| []{id=\"a\\|b\"}x |\n\n"
+    @test linked(h.table(h.tr(h.th("a")), h.tfoot(id="t"))) == "[go](#t)\n\n| a |\n| --- |\n\n[]{#t}"
+    @test to_md(h.div(h.a("t"; href="#tbl-x"), h.table(id="tbl-x")(h.tr(h.th("a")), h.tr(h.td("x"))))) ==
+        "[t](#tbl-x)\n\n::: {#tbl-x}\n\n| a |\n| --- |\n| x |\n\n:::\n\n"
+end
+
 # ================================================================
 # HXML (Hyperview) rendering
 # ================================================================

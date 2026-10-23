@@ -250,6 +250,7 @@ The output targets Pandoc and Quarto, so their documents keep what accessible (t
 - An image's alt text is a Pandoc attribute, `![](src){alt="…"}`. A described image alone in its paragraph (`![alt](src)`) would be a Pandoc implicit figure, which Quarto captions with the description while dropping the image's alt text. GFM and Julia `Markdown` show the attribute as text.
 - An element whose `lang` differs from the enclosing language is written in a Pandoc language scope: a block as a fenced div `::: {lang="en"}`, inline content (and a block inside a list item, table cell, heading or caption) as a span `[…]{lang="en"}`. The `html` element's `lang` is the document language and writes nothing; Quarto takes that from its own `lang:` option.
 - An `ol` is numbered from its `start`. A list directly after another list starts after a blank line, and two adjacent lists of the same kind are kept apart by a `<!-- -->` line.
+- An element's `id` is written when an in-page link of the same document points at it (`h.a("T0"; href="#abschnitt-T0")`), so the link resolves when Quarto renders the Markdown (Typst stops on a link to a missing label). Ids nothing links to, such as hx-swap targets, are not written. A block element becomes a fenced div `::: {#id}`, which also carries a changed `lang` (`::: {#id lang="en"}`); a heading writes `## Title {#id}`, and a `section` or `article` puts its id on the heading that opens it (else it is a fenced div). Inline content, an image, a list item, a table cell, row or section, and a block inside a list item, table cell or inline content get an empty anchor span `[]{#id}` in front of them; two anchors in a row are kept apart by a zero-width space, since Typst keeps one label per position. An id outside letters, digits and `_ . : -` is written `{id="…"}`. The links are collected once per top-level `show`, from `<a href="#…">` in the tree, from strings, and from the Markdown of other children; a document assembled from several separate `show` calls does not share them. Quarto numbers a div whose id starts with `fig-`, `tbl-` or `lst-` as a figure, table or listing.
 
 Conversion table:
 
@@ -268,6 +269,7 @@ Conversion table:
 | `strong`/`b`, `em`/`i`, `code`    | `**…**`, `*…*`, `` `…` `` |
 | `article`, `section`              | wrapped in `---` dividers |
 | `header`                          | `### ` when inline-only; its own blocks (heading, nav, …) unprefixed |
+| any element with a linked `id`    | `::: {#id}` (block), `## T {#id}` (heading, section), `[]{#id}` anchor (other) |
 | `title`                           | `# `                      |
 | `hr`                              | `---`                     |
 | `script`, `style`, `meta`, `link` | skipped                   |
