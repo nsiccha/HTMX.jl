@@ -315,13 +315,14 @@ Base.show(io::IO, ::MIME"text/markdown", val::AbstractString) = print(io, val)
 
 # Arrays: render each element as siblings, the way a node's children render
 Base.show(io::IO, m::MIME"text/markdown", val::AbstractArray) =
-    (s = _md_stream(io); foreach(v -> _md_child(s, m, v), val))
+    (s = _md_stream(io, m, val); foreach(v -> _md_child(s, m, v), val))
 
 # Block boundaries. Containers (div, nav, main, ...) mix inline runs and block
 # elements, so a block can follow inline text on the same line
 # (`[link](/)# Title`). Markdown is written through `_MDStream`, which records
 # how the output so far ends; a block that would start mid-line first closes
-# the inline run as a paragraph. One stream spans a whole top-level `show`.
+# the inline run as a paragraph. One stream spans a whole top-level `show` and
+# carries the ids that the document's in-page links point at.
 mutable struct _MDStream{T<:IO} <: IO
     io::T
     newlines::Int  # trailing '\n' count, capped at 2; 2 = start of output
@@ -334,11 +335,13 @@ mutable struct _MDStream{T<:IO} <: IO
     number::Union{Nothing,Int}  # next `<ol>` item number; nothing outside an `<ol>`
     last_list::Symbol  # kind (:ul/:ol) of a list that just ended, else :none
     lang::String   # language of the enclosing content; "" = not declared
+    targets::Set{String}  # ids that in-page links of the document point at
+    anchor::Bool   # the output so far ends with an id anchor `[]{#…}`
 end
-_MDStream(io::IO; inline=0, item=0, lang="") =
-    _MDStream(io, 2, false, false, 0, inline, item, 0, nothing, :none, lang)
-_md_stream(io::_MDStream) = io
-_md_stream(io::IO) = _MDStream(io)
+_MDStream(io::IO; inline=0, item=0, lang="", targets=Set{String}()) =
+    _MDStream(io, 2, false, false, 0, inline, item, 0, nothing, :none, lang, targets, false)
+_md_stream(io::_MDStream, m, x) = io
+_md_stream(io::IO, m, x) = _MDStream(io; targets=_md_link_targets(io, m, x))
 
 Base.get(s::_MDStream, key, default) = get(s.io, key, default)
 
@@ -354,6 +357,7 @@ end
 function _md_after_write!(s::_MDStream, trailing::Int, all_newlines::Bool)
     s.newlines = min(2, all_newlines ? s.newlines + trailing : trailing)
     s.open = false
+    s.anchor = false
     all_newlines || (s.last_list = :none)
 end
 # Whitespace-only text between elements carries no content: it neither ends a
@@ -413,14 +417,14 @@ _md_container(s::_MDStream, m, node) =
 _md_inline_recurse(s::_MDStream, m, node) =
     (s.inline += 1; _md_recurse(s, m, node); s.inline -= 1; nothing)
 
-# Node: dispatch by tag via _md(io, m, node, ::Val{tag}), inside a language
-# scope when the node declares a language other than the enclosing one
-Base.show(io::IO, m::MIME"text/markdown", n::Node) = _md_node(_md_stream(io), m, n)
+# Node: dispatch by tag via _md(io, m, node, ::Val{tag}), with the node's own
+# id and language written as its kind places them (see `_md_attrs`)
+Base.show(io::IO, m::MIME"text/markdown", n::Node) = _md_node(_md_stream(io, m, n), m, n)
 function _md_node(s::_MDStream, m, n::Node)
     v = Val(tag(n))
-    lang = _md_lang_change(s, n)
-    isnothing(lang) && return _md(s, m, n, v)
-    _md_lang(t -> _md(t, m, n, v), s, lang, _md_lang_kind(v))
+    id, lang = _md_link_id(s, n), _md_lang_change(s, n)
+    isnothing(id) && isnothing(lang) && return _md(s, m, n, v)
+    _md_attrs(s, m, n, v, id, lang, _md_attr_kind(v))
 end
 
 # Language of parts. An element whose `lang` differs from the enclosing
@@ -441,20 +445,126 @@ end
 # The language a table row or cell inherits: its own, else its section's.
 _md_own_lang(n::Node, lang) = something(_md_declared_lang(n), lang)
 
-# How an element's own language scope is written.
-_md_lang_kind(::Val) = Val(:inline)
-_md_lang_kind(::Val{:html}) = Val(:document)
-_md_lang_kind(::Val{:li}) = Val(:item)  # the item writes it inside its marker
-for t in (:br, :hr, :head, :script, :style, :meta, :link, :button)
-    @eval _md_lang_kind(::Val{$(QuoteNode(t))}) = Val(:none)
+# Element ids. An element's `id` is written only when an in-page link of the
+# same document points at it (`[…](#id)`): most ids in an HTMX page name
+# hx-swap targets, not places in the document, and Markdown without in-page
+# links stays as it was. Quarto stops on a link to a missing label, so every
+# such id is written where Pandoc keeps it as a Typst label:
+# - a block element: a fenced div `::: {#id}`, which also carries the element's
+#   language (`::: {#id lang="en"}`);
+# - a heading: `## Title {#id}`; a section or article: on the heading that opens
+#   it, Pandoc's own model of a section, else as a block;
+# - anything else, and a block where a fence would break the line: an empty
+#   anchor span `[]{#id}` in front of the element. Pandoc's Typst writer drops
+#   an image's own id, and Typst keeps one label per position (a span that ends
+#   where an enclosing labelled span ends loses its label), so an id never goes
+#   on a span around content, and two anchors in a row are kept apart by a
+#   zero-width space.
+# An id the `#` shorthand cannot spell is written `{id="…"}`.
+
+# The fragments that the in-page links of `x` point at, collected once per
+# top-level `show`: `<a href="#…">` in the node tree, and `](#…)` in the
+# Markdown of any other value, which is rendered once for this. A `<pre>` body,
+# and that rendering, write no ids.
+_md_link_targets(io, m, x) = get(io, :md_verbatim, false) || get(io, :md_scan, false) ?
+    Set{String}() : _md_link_targets!(Set{String}(), m, x)
+function _md_link_targets!(t, m, n::Node)
+    tag(n) === :a && _md_push_target!(t, get(attrs(n), :href, nothing))
+    foreach(c -> _md_link_targets!(t, m, c), children(n))
+    t
+end
+_md_link_targets!(t, m, v::AbstractArray) = (foreach(c -> _md_link_targets!(t, m, c), v); t)
+_md_link_targets!(t, m, ::Number) = t
+_md_link_targets!(t, m, x::AbstractString) = _md_scan_targets!(t, x)
+_md_link_targets!(t, m, x) = _md_scan_targets!(t, sprint(show, m, x; context=:md_scan => true))
+function _md_push_target!(t, href)
+    h = string(something(href, ""))
+    startswith(h, '#') && length(h) > 1 && push!(t, h[nextind(h, 1):end])
+    t
+end
+_md_scan_targets!(t, text) = (for mt in eachmatch(r"\]\(#([^\s)]+)", text); push!(t, mt[1]); end; t)
+
+# The id of `n` to write: its `id`, when a link of the document points at it.
+function _md_link_id(s::_MDStream, n::Node)
+    id = get(attrs(n), :id, nothing)
+    (id === nothing || id === false) && return nothing
+    id = string(id)
+    id in s.targets ? id : nothing
+end
+_md_link_ids(s::_MDStream, n::Node) = (id = _md_link_id(s, n); isnothing(id) ? String[] : [id])
+
+# An empty anchor span in front of what follows. A block prefix or inline
+# opener written just before it (`- `, `## `) stays open, so the element's own
+# content still follows on that line.
+_md_anchor(s::_MDStream, ::Nothing) = nothing
+function _md_anchor(s::_MDStream, id::AbstractString)
+    open = s.open
+    s.anchor && print(s, '\u200b')
+    print(s, "[]", _md_attr_block(id))
+    s.open = open
+    s.anchor = true
+    nothing
 end
 
-_md_lang(f, s, lang, ::Union{Val{:none},Val{:item}}) = f(s)
-_md_lang(f, s, lang, ::Val{:document}) = _md_in_lang(f, s, lang)
-_md_lang(f, s, lang, ::Val{:inline}) = _md_lang_span(f, s, lang)
-_md_lang(f, s, lang, ::Val{:block}) =
-    s.inline > 0 || s.item > 0 || get(s, :md_table_cell, false) ?
-        _md_lang_span(f, s, lang) : _md_lang_fence(f, s, lang)
+# Inside inline content or a table cell, block markup is plain text.
+_md_inline_context(s::_MDStream) = s.inline > 0 || get(s, :md_table_cell, false)
+# There, and in a list item, a fenced div would break the line.
+_md_span_context(s::_MDStream) = _md_inline_context(s) || s.item > 0
+
+# How an element's own id and language are written.
+_md_attr_kind(::Val) = Val(:inline)
+_md_attr_kind(::Val{:html}) = Val(:document)
+_md_attr_kind(::Val{:li}) = Val(:item)        # the item writes them after its marker
+_md_attr_kind(::Val{:figure}) = Val(:figure)  # the figure writes its own id
+for lvl in 1:6
+    @eval _md_attr_kind(::Val{$(QuoteNode(Symbol("h$lvl")))}) = Val(:heading)
+end
+for t in (:article, :section)
+    @eval _md_attr_kind(::Val{$(QuoteNode(t))}) = Val(:section)
+end
+for t in (:br, :hr, :head, :script, :style, :meta, :link, :button)
+    @eval _md_attr_kind(::Val{$(QuoteNode(t))}) = Val(:none)  # no language scope
+end
+
+_md_attrs(s, m, n, v, id, lang, ::Val{:none}) = (_md_anchor(s, id); _md(s, m, n, v))
+_md_attrs(s, m, n, v, id, lang, ::Val{:document}) =
+    _md_in_lang(t -> _md_attrs(t, m, n, v, id, nothing, Val(:block)), s, lang)
+_md_attrs(s, m, n, v, id, lang, ::Val{:item}) = _md(s, m, n, v; id, lang)
+_md_attrs(s, m, n, v, id, lang, ::Val{:figure}) = _md_attrs(s, m, n, v, nothing, lang, Val(:block))
+_md_attrs(s, m, n, v, id, lang, ::Val{:inline}) =
+    (_md_anchor(s, id); _md_lang_span(t -> _md(t, m, n, v), s, lang))
+function _md_attrs(s, m, n, v, id, lang, ::Val{:block})
+    isnothing(id) && isnothing(lang) && return _md(s, m, n, v)
+    _md_span_context(s) && return _md_attrs(s, m, n, v, id, lang, Val(:inline))
+    _md_fenced_div(t -> _md(t, m, n, v), s, id, lang)
+end
+# A heading keeps its id on its line wherever it is a heading, which it is not
+# inside inline content, a table cell or a language span.
+function _md_attrs(s, m, n, v, id, lang, ::Val{:heading})
+    if _md_inline_context(s) || (!isnothing(lang) && _md_span_context(s))
+        return _md_attrs(s, m, n, v, id, lang, Val(:inline))
+    end
+    heading(t) = _md(t, m, n, v; id)
+    isnothing(lang) ? heading(s) : _md_fenced_div(heading, s, nothing, lang)
+end
+# A section's id goes on the heading that opens it, unless that heading
+# writes an id of its own; else the section is a block.
+function _md_attrs(s, m, n, v, id, lang, ::Val{:section})
+    i = isnothing(id) || _md_inline_context(s) ? nothing : _md_opening_heading(s, n)
+    isnothing(i) && return _md_attrs(s, m, n, v, id, lang, Val(:block))
+    kids = copy(children(n))
+    kids[i] = kids[i](; id)
+    _md_attrs(s, m, Node(tag(n), attrs(n), kids), v, nothing, lang, Val(:block))
+end
+# The index of the heading that is `n`'s first child, if it writes no id of its own.
+function _md_opening_heading(s, n)
+    for (i, c) in enumerate(children(n))
+        c isa AbstractString && all(isspace, c) && continue
+        return c isa Node && _md_attr_kind(Val(tag(c))) === Val(:heading) &&
+            isnothing(_md_link_id(s, c)) ? i : nothing
+    end
+    nothing
+end
 
 function _md_in_lang(f, s::_MDStream, lang)
     prev = s.lang
@@ -463,10 +573,11 @@ function _md_in_lang(f, s::_MDStream, lang)
     s.lang = prev
     nothing
 end
-function _md_lang_fence(f, s::_MDStream, lang)
+_md_in_lang(f, s::_MDStream, ::Nothing) = f(s)
+function _md_fenced_div(f, s::_MDStream, id, lang)
     _md_block_start(s)
     _md_blank_line(s)
-    println(s, "::: {lang=", _md_attr_value(lang), "}")
+    println(s, "::: ", _md_attr_block(id, :lang => lang))
     println(s)
     _md_in_lang(f, s, lang)
     _md_end_line(s)
@@ -474,17 +585,35 @@ function _md_lang_fence(f, s::_MDStream, lang)
     print(s, "\n")
 end
 # The span's content renders into its own buffer, so the leading and trailing
-# line breaks of a block inside it stay outside the brackets.
+# line breaks of a block inside it stay outside the brackets. The brackets
+# leave no trace in Typst, so an anchor on either side of them is adjacent to
+# one inside.
+_md_lang_span(f, s::_MDStream, ::Nothing) = f(s)
 function _md_lang_span(f, s::_MDStream, lang)
     buf = IOBuffer()
-    t = _MDStream(IOContext(buf, s.io); inline=s.inline + 1, item=s.item, lang)
+    t = _MDStream(IOContext(buf, s.io); inline=s.inline + 1, item=s.item, lang, targets=s.targets)
+    t.anchor = s.anchor
     f(t)
     s.blocks += t.blocks
     text = strip(String(take!(buf)), '\n')
-    isempty(text) || print(s, _md_lang_span_text(text, lang))
+    isempty(text) && return
+    print(s, _md_lang_span_text(text, lang))
+    s.anchor = t.anchor
 end
-_md_lang_span_text(text, lang) = string("[", text, "]{lang=", _md_attr_value(lang), "}")
+_md_lang_span_text(text, lang) = string("[", text, "]", _md_attr_block(nothing, :lang => lang))
 
+# A Pandoc attribute block, `{#id lang="en"}`: the id, written `id="…"` when the
+# `#` shorthand cannot spell it (letters, digits and `_ . : -`), then each
+# `key => value` that is not `nothing`.
+function _md_attr_block(id, pairs::Pair...)
+    parts = String[]
+    isnothing(id) ||
+        push!(parts, occursin(r"^[\p{L}\p{N}_.:-]+$", id) ? "#" * id : "id=" * _md_attr_value(id))
+    for (k, v) in pairs
+        isnothing(v) || push!(parts, string(k, "=", _md_attr_value(v)))
+    end
+    string("{", join(parts, " "), "}")
+end
 # A quoted Pandoc attribute value; a line break becomes a space, so the
 # attribute stays on its line (a heading, a table row).
 _md_attr_value(v) =
@@ -541,10 +670,12 @@ _md(io, m, node::Node, ::Val{:a}) =
 # Inside a table cell a newline would end the row, so the break stays inline HTML.
 _md(io, m, node::Node, ::Val{:br}) = print(io, get(io, :md_table_cell, false) ? "<br>" : "\n")
 
-# Headings h1..h6: one line, so their content stays one paragraph
+# Headings h1..h6: one line, so their content stays one paragraph, ending in
+# the heading's id when it writes one
 for lvl in 1:6
-    @eval _md(io, m, node::Node, ::Val{$(QuoteNode(Symbol("h$lvl")))}) =
-        (_md_block_start(io); _md_open(io, $("#"^lvl * " ")); _md_inline_recurse(io, m, node); println(io))
+    @eval _md(io, m, node::Node, ::Val{$(QuoteNode(Symbol("h$lvl")))}; id=nothing) =
+        (_md_block_start(io); _md_open(io, $("#"^lvl * " ")); _md_inline_recurse(io, m, node);
+         isnothing(id) || print(io, " ", _md_attr_block(id)); println(io))
 end
 
 # Other containers: recurse transparently (inline elements, and table
@@ -596,11 +727,10 @@ for t in _MD_CONTAINERS
     @eval _md(io, m, node::Node, ::Val{$(QuoteNode(t))}) = _md_container(io, m, node)
 end
 
-# Block elements whose own language scope is a fenced div (see `_md_lang`)
-for t in (_MD_CONTAINERS..., :details, :article, :section, :header, :p,
-          (Symbol("h$lvl") for lvl in 1:6)..., :title, :pre, :blockquote,
-          :figure, :figcaption, :table, :ul, :ol)
-    t === :html || @eval _md_lang_kind(::Val{$(QuoteNode(t))}) = Val(:block)
+# Block elements whose own id and language scope are a fenced div (see `_md_attrs`)
+for t in (_MD_CONTAINERS..., :details, :header, :p, :title, :pre, :blockquote,
+          :figcaption, :table, :ul, :ol)
+    t === :html || @eval _md_attr_kind(::Val{$(QuoteNode(t))}) = Val(:block)
 end
 
 # <details>: a block container that skips the <summary> toggle label
@@ -637,7 +767,7 @@ end
 
 # Whether rendering `node`'s children starts any block element.
 function _md_has_blocks(s::_MDStream, m, node)
-    probe = _MDStream(devnull; lang=s.lang)
+    probe = _MDStream(devnull; lang=s.lang, targets=s.targets)
     _md_recurse(probe, m, node)
     probe.blocks > 0
 end
@@ -650,14 +780,14 @@ end
 # Block leaves
 _md(io, m, node::Node, ::Val{:p}) =
     (_md_block_start(io); _md_recurse(io, m, node); println(io); println(io))
-# A list item's own language is a span after its marker, so the item stays in
-# its list.
-function _md(io, m, node::Node, ::Val{:li})
+# A list item's own id and language are an anchor and a span after its marker,
+# so the item stays in its list.
+function _md(io, m, node::Node, ::Val{:li}; id=nothing, lang=nothing)
     _md_next_list_item(io); _md_block_start(io); _md_open(io, _md_item_marker(io))
     io.item += 1
     io.items += 1
-    lang = _md_lang_change(io, node)
-    isnothing(lang) ? _md_recurse(io, m, node) : _md_lang_span(t -> _md_recurse(t, m, node), io, lang)
+    _md_anchor(io, id)
+    _md_lang_span(t -> _md_recurse(t, m, node), io, lang)
     io.item -= 1
     println(io); _md_end_list_item(io)
 end
@@ -704,7 +834,7 @@ _md(io, m, node::Node, ::Val{:title}) =
 # <blockquote> → "> "-prefixed lines
 function _md(io, m, node::Node, ::Val{:blockquote})
     buf = IOBuffer()
-    _md_recurse(_MDStream(buf; lang=io.lang), m, node)
+    _md_recurse(_MDStream(buf; lang=io.lang, targets=io.targets), m, node)
     inner = rstrip(String(take!(buf)), '\n')
     isempty(inner) && return
     _md_block_start(io)
@@ -718,14 +848,15 @@ end
 # attribute, not the image description: a described image alone in its
 # paragraph is a Pandoc implicit figure, whose caption Quarto takes from the
 # description while the image itself loses its alt text (a PDF/UA build then
-# fails). GFM and Julia Markdown show the attribute as text.
+# fails). GFM and Julia Markdown show the attribute as text. Its id is an anchor
+# in front of it, since Pandoc's Typst writer drops an image's own id.
 function _md(io, m, node::Node, ::Val{:img})
     a = attrs(node)
     src = get(a, :src, "")
     isempty(src) && return
     print(io, "![](", src, ")")
     alt = get(a, :alt, nothing)
-    (alt === nothing || alt === false) || print(io, "{alt=", _md_attr_value(alt), "}")
+    (alt === nothing || alt === false) || print(io, _md_attr_block(nothing, :alt => alt))
 end
 
 # <figure> → Quarto fenced div.  Blank lines before/after guarantee
@@ -755,7 +886,7 @@ function _md(io, m, node::Node, ::Val{:figure})
     end
     _md_block_start(io, "")
     print(io, "\n\n")
-    println(io, isnothing(id) ? "::: {}" : "::: {#$id}")
+    println(io, "::: ", _md_attr_block(isnothing(id) ? nothing : string(id)))
     println(io)
     for (i, c) in enumerate(content)
         i > 1 && (_md_end_line(io); println(io))
@@ -771,11 +902,11 @@ function _md(io, m, node::Node, ::Val{:figure})
     println(io, ":::")
     print(io, "\n")
 end
-# The caption stays one paragraph, so its own language is a span.
+# The caption stays one paragraph, so its own id and language are an anchor
+# and a span.
 function _md_figure_caption(io, m, caption)
-    lang = _md_lang_change(io, caption)
-    isnothing(lang) ? _md_inline_recurse(io, m, caption) :
-        _md_lang_span(t -> _md_inline_recurse(t, m, caption), io, lang)
+    _md_anchor(io, _md_link_id(io, caption))
+    _md_lang_span(t -> _md_inline_recurse(t, m, caption), io, _md_lang_change(io, caption))
 end
 
 # A <figcaption> placed outside a figure (in a custom layout) is a block whose
@@ -785,52 +916,66 @@ _md(io, m, node::Node, ::Val{:figcaption}) =
 
 # A table child is either a row itself (`<tr>` directly under `<table>`, which
 # browsers wrap in an implicit `<tbody>`) or a section whose `<tr>` children
-# are the rows; `caption`/`colgroup` hold no `tr` and so contribute nothing.
-# Each row is collected with the language it inherits from its section.
-_collect_table_rows!(rows, ::Any, lang) = nothing
-_collect_table_rows!(rows, c::Node, lang) =
-    _collect_table_rows!(rows, c, _md_own_lang(c, lang), Val(tag(c)))
-_collect_table_rows!(rows, row::Node, lang, ::Val{:tr}) = push!(rows, row => lang)
-_collect_table_rows!(rows, section::Node, lang, ::Val) = for row in children(section)
-    _push_tr!(rows, row, lang)
+# are the rows; `caption`/`colgroup` hold no `tr` and so contribute no rows.
+# Each row is collected with the language it inherits from its section and the
+# ids it writes. A section's ids are collected as an entry without a row, so
+# they are anchored at the next cell, as a row's are.
+_collect_table_rows!(rows, s, ::Any, lang) = nothing
+_collect_table_rows!(rows, s, c::Node, lang) =
+    _collect_table_rows!(rows, s, c, _md_own_lang(c, lang), Val(tag(c)))
+_collect_table_rows!(rows, s, row::Node, lang, ::Val{:tr}) = push!(rows, (row, lang, _md_link_ids(s, row)))
+function _collect_table_rows!(rows, s, section::Node, lang, ::Val)
+    ids = _md_link_ids(s, section)
+    isempty(ids) || push!(rows, (nothing, lang, ids))
+    for row in children(section)
+        row isa Node && tag(row) === :tr && push!(rows, (row, _md_own_lang(row, lang), _md_link_ids(s, row)))
+    end
 end
-_push_tr!(rows, ::Any, lang) = nothing
-_push_tr!(rows, r::Node, lang) = string(tag(r)) == "tr" && push!(rows, r => _md_own_lang(r, lang))
 
 # A table row is one line: a cell renders `<br>` as inline HTML (see `_md` for
 # `:br`), folds any other line break (block content, multi-line text) into
 # `<br>`, and escapes `|` so it cannot split the cell, including inside code.
 # The cell's children share one stream, so blocks among them are delimited.
 # A cell whose language (its own, else its row's) differs from the table's is
-# a language span.
-_push_cell_text!(cells, ::Any, lang, table_lang) = nothing
-function _push_cell_text!(cells, c::Node, lang, table_lang)
+# a language span. The ids waiting in `anchors` (its section's and row's) and
+# its own are anchors at its start.
+_push_cell_text!(cells, s, ::Any, lang, anchors) = nothing
+function _push_cell_text!(cells, s::_MDStream, c::Node, lang, anchors)
     lang = _md_own_lang(c, lang)
+    append!(anchors, _md_link_ids(s, c))
+    prefix = _md_cell_text(t -> foreach(id -> _md_anchor(t, id), anchors), s, lang, false)
+    text = _md_cell_text(t -> _md_recurse(t, _md_mime, c), s, lang, !isempty(anchors))
+    empty!(anchors)
+    push!(cells, prefix * (isempty(text) || _md_same_lang(lang, s.lang) ? text : _md_lang_span_text(text, lang)))
+end
+function _md_cell_text(f, s::_MDStream, lang, anchor)
     buf = IOBuffer()
-    _md_recurse(_MDStream(IOContext(buf, :md_table_cell => true); lang), _md_mime, c)
-    text = replace(strip(String(take!(buf))), r"\s*\n\s*" => "<br>")
-    text = replace(text, "|" => "\\|")
-    push!(cells, isempty(text) || _md_same_lang(lang, table_lang) ? text : _md_lang_span_text(text, lang))
+    t = _MDStream(IOContext(buf, :md_table_cell => true); lang, targets=s.targets)
+    t.anchor = anchor
+    f(t)
+    replace(replace(strip(String(take!(buf))), r"\s*\n\s*" => "<br>"), "|" => "\\|")
 end
 
 function _table_to_markdown(io::_MDStream, table::Node)
-    rows = Pair{Node,String}[]
+    rows = Tuple{Union{Node,Nothing},String,Vector{String}}[]
     for section in children(table)
-        _collect_table_rows!(rows, section, io.lang)
+        _collect_table_rows!(rows, io, section, io.lang)
     end
-    isempty(rows) && return
-    _md_block_start(io)
-    for (i, (row, lang)) in enumerate(rows)
+    anchors = String[]  # ids waiting for the next cell
+    written = 0
+    for (row, lang, ids) in rows
+        append!(anchors, ids)
+        isnothing(row) && continue
+        written == 0 && _md_block_start(io)
         cells = String[]
         for c in children(row)
-            _push_cell_text!(cells, c, lang, io.lang)
+            _push_cell_text!(cells, io, c, lang, anchors)
         end
         println(io, "| ", join(cells, " | "), " |")
-        if i == 1
-            println(io, "| ", join(fill("---", length(cells)), " | "), " |")
-        end
+        (written += 1) == 1 && println(io, "| ", join(fill("---", length(cells)), " | "), " |")
     end
-    println(io)
+    written > 0 && println(io)
+    foreach(id -> _md_anchor(io, id), anchors)  # ids that no cell came after
 end
 
 # --- Hyperview HXML rendering ---
