@@ -152,6 +152,31 @@ byte-identical HTML.
 end
 
 """
+A `nothing` child is dropped by the builder, as a `nothing` attribute is: an
+optional child written `cond ? x : nothing` leaves no "nothing" text in the
+HTML, Markdown or HXML output. This holds for positional children, `nothing`
+elements of a vector argument, and children appended through the call syntax.
+"""
+@testitem "nothing children are dropped" setup=[HTMXTestHelpers] tags=[:unit, :nodes] begin
+    n = h.div("a", nothing, "b")
+    @test HTMX.children(n) == ["a", "b"]
+    @test html(n) == "<div>ab</div>"
+    @test to_md(n) == "ab"
+    @test hxml(h.div("a", nothing, h.p("x"), nothing)) ==
+          hxml(h.div("a", h.p("x")))
+    # vector argument, call syntax, a lone `nothing`
+    @test html(h.ul([h.li("1"), nothing, h.li("2")])) == "<ul><li>1</li><li>2</li></ul>"
+    @test html(h.ul(Union{Nothing,HTMX.Node}[nothing, h.li("1")])) == "<ul><li>1</li></ul>"
+    @test html(h.div("a")(nothing, "b")) == "<div>ab</div>"
+    @test HTMX.children(h.p(nothing)) == []
+    # Markdown block structure ignores the dropped child
+    @test to_md(h.div(h.p("x"), nothing, h.p("y"))) == to_md(h.div(h.p("x"), h.p("y")))
+    # the reported shape: an optional child written with a ternary
+    show_x = false
+    @test html(h.div("a", show_x ? h.p("x") : nothing, "b")) == "<div>ab</div>"
+end
+
+"""
 Varargs child collection is linear in the child count: doubling the children
 roughly doubles allocation instead of quadrupling it (folding `vcat` across
 the arguments is quadratic).
