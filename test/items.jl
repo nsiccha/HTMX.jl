@@ -519,8 +519,8 @@ identified child figures nests instead of closing at the first child's fence.
         h.figure(id="fig-b")(h.img(src="/b.png", alt="B"), h.figcaption("B")),
         h.figcaption("Both"))
     @test to_md(composite) ==
-        "\n\n::: {}\n\n\n\n::: {#fig-a}\n\n![A](/a.png)\n\nA\n:::\n\n\n\n\n" *
-        "::: {#fig-b}\n\n![B](/b.png)\n\nB\n:::\n\n\nBoth\n:::\n\n"
+        "\n\n::: {}\n\n\n\n::: {#fig-a}\n\n![](/a.png){alt=\"A\"}\n\nA\n:::\n\n\n\n\n" *
+        "::: {#fig-b}\n\n![](/b.png){alt=\"B\"}\n\nB\n:::\n\n\nBoth\n:::\n\n"
 end
 
 """
@@ -614,7 +614,7 @@ prefix every line.
         h.figcaption("Caption"),
     )
     @test to_md(figure) ==
-        "\n\n::: {#fig-main}\n\n![A](/a.png)\n\nCaption\n:::\n\n"
+        "\n\n::: {#fig-main}\n\n![](/a.png){alt=\"A\"}\n\nCaption\n:::\n\n"
 
     details = h.details(h.summary("Toggle"), h.p("Visible ", h.strong("content")))
     @test to_md(details) == "Visible **content**\n\n"
@@ -742,7 +742,7 @@ where it was.
     @test to_md(h.blockquote("a", h.h1("b"))) == "> a\n> \n> # b\n\n"
     @test to_md(h.ul(h.li(h.p("a")), h.li(h.p("b")))) == "- a\n\n\n- b\n\n\n"
     @test to_md(h.div("see", h.figure(h.img(src="/a.png", alt="A")))) ==
-        "see\n\n::: {}\n\n![A](/a.png)\n:::\n\n"
+        "see\n\n::: {}\n\n![](/a.png){alt=\"A\"}\n:::\n\n"
 end
 
 """
@@ -793,7 +793,7 @@ caption, which Quarto reads as the figure div's last paragraph.
     @test to_md(h.h2(h.div("a"), h.div("b"))) == "## ab\n"
     caption = h.figcaption(h.div(class="caption-header")(h.span(h.strong("Title"), " — short")), " — long")
     @test to_md(h.figure(id="fig-a")(h.img(src="/a.png", alt="A"), caption)) ==
-        "\n\n::: {#fig-a}\n\n![A](/a.png)\n\n**Title** — short — long\n:::\n\n"
+        "\n\n::: {#fig-a}\n\n![](/a.png){alt=\"A\"}\n\n**Title** — short — long\n:::\n\n"
     # a caption rendered on its own (placed in a custom layout) stays one paragraph too
     @test to_md(caption) == "**Title** — short — long"
     @test to_md(h.div("before", caption, "after")) == "before\n\n**Title** — short — long\n\nafter"
@@ -817,6 +817,105 @@ or a vector's elements; inside a link it stays inline.
     @test to_md(h.div("lead", BlockThing(), "tail")) == "lead\n\n**A:** 1\n\ntail"
     @test to_md([BlockThing(), BlockThing()]) == "**A:** 1\n\n**A:** 1"
     @test to_md(h.a(href="/")(BlockThing(), "x")) == "[**A:** 1x](/)"
+end
+
+"""
+An image is inline, as in HTML, and its alt text is a Pandoc attribute rather
+than the image description: a described image alone in its paragraph is a
+Pandoc implicit figure, whose caption Quarto takes from the description while
+the image loses its alt text (a PDF/UA-1 build then fails). A figure still
+gives its image its own paragraph, ahead of the caption.
+"""
+@testitem "markdown - img keeps its alt text as an attribute" setup=[HTMXTestHelpers] tags=[:unit, :markdown] begin
+    img = h.img(src="/a.png", alt="A")
+    @test to_md(h.div(img)) == "![](/a.png){alt=\"A\"}"
+    @test to_md(h.p("See ", img, " here.")) == "See ![](/a.png){alt=\"A\"} here.\n\n"
+    @test to_md(h.h2(h.img(src="/i.png", alt="Icon"), " Title")) == "## ![](/i.png){alt=\"Icon\"} Title\n"
+    @test to_md(h.a(href="/")(img)) == "[![](/a.png){alt=\"A\"}](/)"
+    @test to_md(h.table(h.tr(h.th("x")), h.tr(h.td(img)))) ==
+        "| x |\n| --- |\n| ![](/a.png){alt=\"A\"} |\n\n"
+    # no alt attribute, an empty (decorative) alt, and a value needing escapes
+    @test to_md(h.img(src="/a.png")) == "![](/a.png)"
+    @test to_md(h.img(src="/a.png", alt="")) == "![](/a.png){alt=\"\"}"
+    @test to_md(h.img(src="/a.png", alt="say \"hi\" \\ ok\nnext")) ==
+        "![](/a.png){alt=\"say \\\"hi\\\" \\\\ ok next\"}"
+    @test to_md(h.img(alt="no source")) == ""
+    # in a figure every child is its own paragraph and the caption comes last
+    @test to_md(h.figure(id="fig-r")(h.figcaption("Radon"), img)) ==
+        "\n\n::: {#fig-r}\n\n![](/a.png){alt=\"A\"}\n\nRadon\n:::\n\n"
+    @test to_md(h.figure(img, h.img(src="/b.png", alt="B"))) ==
+        "\n\n::: {}\n\n![](/a.png){alt=\"A\"}\n\n![](/b.png){alt=\"B\"}\n:::\n\n"
+    @test to_md(h.figure("text", h.figcaption("Cap"))) == "\n\n::: {}\n\ntext\n\nCap\n:::\n\n"
+    @test to_md(h.figure("text")) == "\n\n::: {}\n\ntext\n:::\n\n"
+end
+
+"""
+An `<ol>` numbers its items from its `start`, as the HTML shows them. A list
+directly after another list starts after a blank line, and one of the same kind
+also after a `<!-- -->` line, so adjacent lists stay apart in CommonMark and
+Pandoc readers (a change of bullet character does not split a Pandoc list).
+"""
+@testitem "markdown - ordered lists are numbered and adjacent lists stay apart" setup=[HTMXTestHelpers] tags=[:unit, :markdown] begin
+    import Markdown
+    @test to_md(h.ol(h.li("one"), h.li("two"))) == "1. one\n2. two\n"
+    @test to_md(h.ol(start=3)(h.li("c"), h.li("d"))) == "3. c\n4. d\n"
+    @test to_md(h.ol(start="7")(h.li("g"))) == "7. g\n"
+    @test to_md(h.ol(h.li(h.p("a")), h.li(h.p("b")))) == "1. a\n\n\n2. b\n\n\n"
+    # refused: CommonMark list numbers are 0-999999999, so these starts have no Markdown form
+    @test_throws ArgumentError to_md(h.ol(start="x")(h.li("a")))
+    @test_throws ArgumentError to_md(h.ol(start=-1)(h.li("a")))
+
+    @test to_md(h.div(h.ul(h.li("a")), h.ol(h.li("b")))) == "- a\n\n1. b\n"
+    @test to_md(h.div(h.ol(h.li("a")), h.ul(h.li("b")))) == "1. a\n\n- b\n"
+    @test to_md(h.div(h.ul(h.li("a")), h.ul(h.li("b")))) == "- a\n\n<!-- -->\n\n- b\n"
+    @test to_md(h.div(h.ol(h.li("a")), h.ol(h.li("b")))) == "1. a\n\n<!-- -->\n\n1. b\n"
+    @test to_md(h.div(h.div(h.ul(h.li("a"))), h.div(h.ul(h.li("b"))))) == "- a\n\n<!-- -->\n\n- b\n"
+    # lists separated by content, or by an empty list, need no separator
+    @test to_md(h.div(h.ul(h.li("a")), h.p("x"), h.ul(h.li("b")))) == "- a\n\nx\n\n- b\n"
+    @test to_md(h.div(h.p("x"), h.ul(), h.ul(h.li("b")))) == "x\n\n- b\n"
+    # a nested list keeps the outer numbering going
+    @test to_md(h.ol(h.li("a", h.ul(h.li("x"))), h.li("b"))) == "1. a\n\n- x\n\n2. b\n"
+    @test to_md(h.table(h.tr(h.th("x")), h.tr(h.td(h.ol(h.li("a"), h.li("b")))))) ==
+        "| x |\n| --- |\n| 1. a<br>2. b |\n\n"
+
+    lists(s) = [(x.ordered, length(x.items)) for x in Markdown.parse(s).content if x isa Markdown.List]
+    @test lists(to_md(h.ol(start=3)(h.li("c"), h.li("d")))) == [(3, 2)]
+    @test lists(to_md(h.div(h.ul(h.li("a")), h.ol(h.li("b"))))) == [(-1, 1), (1, 1)]
+    @test lists(to_md(h.div(h.ul(h.li("a")), h.ul(h.li("b"))))) == [(-1, 1), (-1, 1)]
+end
+
+"""
+An element whose `lang` differs from the enclosing language is written in a
+Pandoc language scope, which Quarto carries into its output: a block as a
+`::: {lang="…"}` fenced div, inline content (and a block inside a list item,
+table cell, heading or caption, where a fence would break the line) as a
+`[…]{lang="…"}` span. `<html lang>` is the document language and writes
+nothing; a `<pre>` body stays verbatim.
+"""
+@testitem "markdown - lang becomes a Pandoc language scope" setup=[HTMXTestHelpers] tags=[:unit, :markdown] begin
+    @test to_md(h.div(h.p("Deutsch."), h.div(lang="en")(h.p("English.")))) ==
+        "Deutsch.\n\n::: {lang=\"en\"}\n\nEnglish.\n\n:::\n\n"
+    @test to_md(h.div(lang="en")("plain")) == "::: {lang=\"en\"}\n\nplain\n\n:::\n\n"
+    @test to_md(h.p("Das ", h.span(lang="en")("word"), " hier.")) == "Das [word]{lang=\"en\"} hier.\n\n"
+    @test to_md(h.h2(lang="en")("Title")) == "::: {lang=\"en\"}\n\n## Title\n:::\n\n"
+    @test to_md(h.h2("Titel ", h.span(lang="en")("word"))) == "## Titel [word]{lang=\"en\"}\n"
+    @test to_md(h.p(h.a(href="/x", lang="en")("link"))) == "[[link](/x)]{lang=\"en\"}\n\n"
+    # only a change of language is written; html's lang is the document's
+    @test to_md(h.html(lang="de")(h.body(h.p("Hallo"), h.div(lang="en")(h.p("Hi")), h.div(lang="DE")(h.p("Wieder"))))) ==
+        "Hallo\n\n::: {lang=\"en\"}\n\nHi\n\n:::\n\nWieder\n\n"
+    @test to_md(h.div(lang="en")(h.p("a"), h.p(lang="en")("b"))) == "::: {lang=\"en\"}\n\na\n\nb\n\n:::\n\n"
+    # a list item, a cell, a row and a caption stay on their line
+    @test to_md(h.ul(h.li("a"), h.li(lang="en")("b"), h.li(h.div(lang="en")("c")))) ==
+        "- a\n- [b]{lang=\"en\"}\n- [c]{lang=\"en\"}\n"
+    table = h.table(h.tr(h.th("Begriff"), h.th(lang="en")("Term")), h.tr(lang="en")(h.td("dog"), h.td(lang="de")("Hund")))
+    @test to_md(h.html(lang="de")(table)) ==
+        "| Begriff | [Term]{lang=\"en\"} |\n| --- | --- |\n| [dog]{lang=\"en\"} | Hund |\n\n"
+    @test to_md(h.figure(id="fig-e")(h.img(src="/a.png", alt="A"), h.figcaption(lang="en")("Cap"))) ==
+        "\n\n::: {#fig-e}\n\n![](/a.png){alt=\"A\"}\n\n[Cap]{lang=\"en\"}\n:::\n\n"
+    # nothing to tag: an empty lang, an empty span, a <pre> body
+    @test to_md(h.p(lang="")("x")) == "x\n\n"
+    @test to_md(h.p("a", h.span(lang="en"), "b")) == "ab\n\n"
+    @test to_md(h.pre(h.code(h.span(lang="en")("x = 1")))) == "```\nx = 1\n```\n"
 end
 
 # ================================================================

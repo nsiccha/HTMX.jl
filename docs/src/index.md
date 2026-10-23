@@ -245,17 +245,25 @@ A child that is not a `Node` is written with its own `show(io, MIME"text/markdow
 HTMX.markdown_block(::MyCard) = true   # delimited like a div
 ```
 
+The output targets Pandoc and Quarto, so their documents keep what accessible (tagged) PDF output needs:
+
+- An image's alt text is a Pandoc attribute, `![](src){alt="…"}`. A described image alone in its paragraph (`![alt](src)`) would be a Pandoc implicit figure, which Quarto captions with the description while dropping the image's alt text. GFM and Julia `Markdown` show the attribute as text.
+- An element whose `lang` differs from the enclosing language is written in a Pandoc language scope: a block as a fenced div `::: {lang="en"}`, inline content (and a block inside a list item, table cell, heading or caption) as a span `[…]{lang="en"}`. The `html` element's `lang` is the document language and writes nothing; Quarto takes that from its own `lang:` option.
+- An `ol` is numbered from its `start`. A list directly after another list starts after a blank line, and two adjacent lists of the same kind are kept apart by a `<!-- -->` line.
+
 Conversion table:
 
 | HTML tag                          | Markdown                  |
 |-----------------------------------|---------------------------|
 | `h1`–`h6`                         | `#` … `######` headings   |
 | `p`                               | paragraph                 |
-| `ul` / `ol` + `li`                | `- item` lines            |
+| `ul` + `li`                       | `- item` lines            |
+| `ol` + `li`                       | `1. item` lines, numbered from `start` |
 | `pre`                             | fenced code block         |
 | `blockquote`                      | `> ` prefixed lines       |
 | `table` + `thead`/`tbody`/`tr`    | pipe-style Markdown table |
-| `img` / `figure`                  | `![alt](src)`             |
+| `img`                             | `![](src){alt="…"}`, inline |
+| `figure` + `figcaption`           | `::: {#id}` fenced div, caption last |
 | `a`                               | `[text](href)`            |
 | `strong`/`b`, `em`/`i`, `code`    | `**…**`, `*…*`, `` `…` `` |
 | `article`, `section`              | wrapped in `---` dividers |
