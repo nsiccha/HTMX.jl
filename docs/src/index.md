@@ -266,6 +266,7 @@ Conversion table:
 | `img`                             | `![](src){alt="…"}`, inline |
 | `figure` + `figcaption`           | `::: {#id}` fenced div, caption last |
 | `a`                               | `[text](href)`; without a target (no `href`, as on an htmx-only `h.a("x"; hx_get=…)`, or `href=""`/`"#"`) just its content, like a `span` |
+| `br`                              | hard line break, a `\` ending the line (a bare newline would be a soft break, joined with a space); nothing where it ends a paragraph or block, a space in a heading, `<br>` in a table cell |
 | `strong`/`b`, `em`/`i`, `code`    | `**…**`, `*…*`, `` `…` `` |
 | `article`, `section`              | wrapped in `---` dividers |
 | `header`                          | `### ` when inline-only; its own blocks (heading, nav, …) unprefixed |

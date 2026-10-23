@@ -330,6 +330,9 @@ mutable struct _MDStream{T<:IO} <: IO
     lazy::Bool     # a list item or block container just ended
     blocks::Int    # block elements started, or containers that split content
     inline::Int    # depth of content that must stay one paragraph
+    line::Int      # depth of content that must stay one line (a heading)
+    code::Int      # depth of code spans
+    breaks::Int    # `<br>`s waiting for the content they precede
     item::Int      # depth of list items being written
     items::Int     # list items written so far
     number::Union{Nothing,Int}  # next `<ol>` item number; nothing outside an `<ol>`
@@ -338,8 +341,8 @@ mutable struct _MDStream{T<:IO} <: IO
     targets::Set{String}  # ids that in-page links of the document point at
     anchor::Bool   # the output so far ends with an id anchor `[]{#…}`
 end
-_MDStream(io::IO; inline=0, item=0, lang="", targets=Set{String}()) =
-    _MDStream(io, 2, false, false, 0, inline, item, 0, nothing, :none, lang, targets, false)
+_MDStream(io::IO; inline=0, line=0, code=0, item=0, lang="", targets=Set{String}()) =
+    _MDStream(io, 2, false, false, 0, inline, line, code, 0, item, 0, nothing, :none, lang, targets, false)
 _md_stream(io::_MDStream, m, x) = io
 _md_stream(io::IO, m, x) = _MDStream(io; targets=_md_link_targets(io, m, x))
 
@@ -348,11 +351,30 @@ Base.get(s::_MDStream, key, default) = get(s.io, key, default)
 # Content written right after a list item would continue it lazily, and content
 # after a block container belongs to a new paragraph, so anything but the next
 # item starts after a blank line.
-function _md_before_write!(s::_MDStream, byte::UInt8)
+function _md_before_write!(s::_MDStream, byte::UInt8, all_newlines::Bool)
     if s.lazy && byte != UInt8('\n')
         s.lazy = false
         s.newlines < 2 && (s.blocks += 1; write(s.io, "\n"^(2 - s.newlines)))
     end
+    s.breaks > 0 && _md_write_breaks!(s, byte, all_newlines)
+end
+# A `<br>` is written with the content after it. Line endings alone end the
+# block, where HTML shows no break either, so the waiting breaks are dropped.
+# Otherwise each is a hard line break, a `\` ending the line; a code span,
+# which cannot hold one, is closed around them, and a heading, which is one
+# line, gets a space.
+function _md_write_breaks!(s::_MDStream, byte::UInt8, all_newlines::Bool)
+    n, s.breaks = s.breaks, 0
+    all_newlines && return
+    if s.line > 0
+        write(s.io, ' ')
+    elseif s.code > 0
+        write(s.io, '`', "\\\n"^n, '`')
+    else
+        # content that starts with its own line ending needs only the last `\`
+        write(s.io, "\\\n"^(n - 1), byte == UInt8('\n') ? "\\" : "\\\n")
+    end
+    nothing
 end
 function _md_after_write!(s::_MDStream, trailing::Int, all_newlines::Bool)
     s.newlines = min(2, all_newlines ? s.newlines + trailing : trailing)
@@ -365,20 +387,20 @@ end
 _md_blank(byte::UInt8) = byte == UInt8(' ') || byte == UInt8('\t')
 function Base.write(s::_MDStream, b::UInt8)
     _md_blank(b) && return write(s.io, b)
-    _md_before_write!(s, b)
-    n = write(s.io, b)
     newline = b == UInt8('\n')
+    _md_before_write!(s, b, newline)
+    n = write(s.io, b)
     _md_after_write!(s, Int(newline), newline)
     n
 end
 function Base.unsafe_write(s::_MDStream, p::Ptr{UInt8}, n::UInt)
     all(i -> _md_blank(unsafe_load(p, i)), 1:n) && return unsafe_write(s.io, p, n)
-    _md_before_write!(s, unsafe_load(p))
-    written = unsafe_write(s.io, p, n)
     trailing = 0
     while trailing < n && unsafe_load(p, n - trailing) == UInt8('\n')
         trailing += 1
     end
+    _md_before_write!(s, unsafe_load(p), trailing == n)
+    written = unsafe_write(s.io, p, n)
     _md_after_write!(s, trailing, trailing == n)
     written
 end
@@ -396,6 +418,10 @@ end
 _md_close_inline(s::_MDStream, close="\n\n") = s.newlines == 0 && !s.open && (print(s, close); true)
 # Write a block prefix or inline opener that the element's content follows.
 _md_open(s::_MDStream, prefix) = (print(s, prefix); s.open = true; nothing)
+# Write an inline closer (`**`, `](…)`). A closer cannot start a line, so a
+# `<br>` waiting before it is written after it.
+_md_close(s::_MDStream, parts...) =
+    (n = s.breaks; s.breaks = 0; print(s, parts...); s.breaks = n; nothing)
 _md_next_list_item(s::_MDStream) = (s.lazy = false; nothing)
 _md_end_list_item(s::_MDStream) = (s.lazy = true; nothing)
 # Finish a block whose content may end mid-line.
@@ -410,7 +436,7 @@ _md_blank_line(s::_MDStream) = (s.newlines < 2 && print(s, "\n"^(2 - s.newlines)
 # element, a heading, a figure caption) it is transparent.
 _md_container_start(s::_MDStream) =
     (s.inline == 0 && _md_close_inline(s) && (s.blocks += 1); nothing)
-_md_container_end(s::_MDStream) = (s.inline == 0 && (s.lazy = true); nothing)
+_md_container_end(s::_MDStream) = (s.inline == 0 && (s.lazy = true; s.breaks = 0); nothing)
 _md_container(s::_MDStream, m, node) =
     (_md_container_start(s); _md_recurse(s, m, node); _md_container_end(s))
 # Recurse into content that must stay one paragraph.
@@ -591,14 +617,18 @@ end
 _md_lang_span(f, s::_MDStream, ::Nothing) = f(s)
 function _md_lang_span(f, s::_MDStream, lang)
     buf = IOBuffer()
-    t = _MDStream(IOContext(buf, s.io); inline=s.inline + 1, item=s.item, lang, targets=s.targets)
+    t = _MDStream(IOContext(buf, s.io); inline=s.inline + 1, line=s.line, code=s.code,
+                  item=s.item, lang, targets=s.targets)
     t.anchor = s.anchor
     f(t)
     s.blocks += t.blocks
     text = strip(String(take!(buf)), '\n')
-    isempty(text) && return
-    print(s, _md_lang_span_text(text, lang))
-    s.anchor = t.anchor
+    if !isempty(text)
+        print(s, _md_lang_span_text(text, lang))
+        s.anchor = t.anchor
+    end
+    s.breaks += t.breaks  # a break that ends the span is written after it
+    nothing
 end
 _md_lang_span_text(text, lang) = string("[", text, "]", _md_attr_block(nothing, :lang => lang))
 
@@ -657,14 +687,14 @@ _md_child(io::_MDStream, m, c) = markdown_block(c) ?
 # paragraph (a `div` inside a link card stays inside the link text).
 for t in (:strong, :b)
     @eval _md(io, m, node::Node, ::Val{$(QuoteNode(t))}) =
-        (_md_open(io, "**"); _md_inline_recurse(io, m, node); print(io, "**"))
+        (_md_open(io, "**"); _md_inline_recurse(io, m, node); _md_close(io, "**"))
 end
 for t in (:em, :i)
     @eval _md(io, m, node::Node, ::Val{$(QuoteNode(t))}) =
-        (_md_open(io, "*"); _md_inline_recurse(io, m, node); print(io, "*"))
+        (_md_open(io, "*"); _md_inline_recurse(io, m, node); _md_close(io, "*"))
 end
 _md(io, m, node::Node, ::Val{:code}) =
-    (_md_open(io, "`"); _md_inline_recurse(io, m, node); print(io, "`"))
+    (_md_open(io, "`"); io.code += 1; _md_inline_recurse(io, m, node); io.code -= 1; _md_close(io, "`"))
 # An `<a>` that names no target is no link in Markdown. Without `href` (an
 # htmx-only `h.a("x"; hx_get=…)`) HTML has it represent its contents, and an
 # empty or bare `#` href is the usual placeholder on a script-driven link. It
@@ -674,17 +704,22 @@ _md_no_target(href) = href === nothing || href === false || (href isa AbstractSt
 function _md(io, m, node::Node, ::Val{:a})
     href = get(attrs(node), :href, nothing)
     _md_no_target(href) && return _md_recurse(io, m, node)
-    _md_open(io, "["); _md_inline_recurse(io, m, node); print(io, "](", href, ")")
+    _md_open(io, "["); _md_inline_recurse(io, m, node); _md_close(io, "](", href, ")")
 end
-# Inside a table cell a newline would end the row, so the break stays inline HTML.
-_md(io, m, node::Node, ::Val{:br}) = print(io, get(io, :md_table_cell, false) ? "<br>" : "\n")
+# A line break waits for the content after it (see `_md_write_breaks!`). Inside
+# a table cell a newline would end the row, so the break stays inline HTML; a
+# `<pre>` body keeps it verbatim.
+_md(io, m, node::Node, ::Val{:br}) =
+    get(io, :md_table_cell, false) ? print(io, "<br>") :
+    get(io, :md_verbatim, false) ? print(io, "\n") : (io.breaks += 1; nothing)
 
 # Headings h1..h6: one line, so their content stays one paragraph, ending in
 # the heading's id when it writes one
 for lvl in 1:6
     @eval _md(io, m, node::Node, ::Val{$(QuoteNode(Symbol("h$lvl")))}; id=nothing) =
-        (_md_block_start(io); _md_open(io, $("#"^lvl * " ")); _md_inline_recurse(io, m, node);
-         isnothing(id) || print(io, " ", _md_attr_block(id)); println(io))
+        (_md_block_start(io); _md_open(io, $("#"^lvl * " "));
+         io.line += 1; _md_inline_recurse(io, m, node); io.line -= 1;
+         isnothing(id) || _md_close(io, " ", _md_attr_block(id)); println(io))
 end
 
 # Other containers: recurse transparently (inline elements, and table
@@ -770,7 +805,7 @@ function _md(io, m, node::Node, ::Val{:header})
         _md_recurse(io, m, node)
         _md_end_line(io)
     else
-        _md_open(io, "### "); _md_recurse(io, m, node); println(io)
+        _md_open(io, "### "); io.line += 1; _md_recurse(io, m, node); io.line -= 1; println(io)
     end
 end
 
@@ -838,7 +873,7 @@ _md(io, m, node::Node, ::Val{:table}) = _table_to_markdown(io, node)
 
 # <title> → top-level heading (so a full page with <head><title>X</title></head> renders as "# X")
 _md(io, m, node::Node, ::Val{:title}) =
-    (_md_block_start(io); _md_open(io, "# "); _md_inline_recurse(io, m, node); println(io))
+    (_md_block_start(io); _md_open(io, "# "); io.line += 1; _md_inline_recurse(io, m, node); io.line -= 1; println(io))
 
 # <blockquote> → "> "-prefixed lines
 function _md(io, m, node::Node, ::Val{:blockquote})
@@ -942,8 +977,9 @@ function _collect_table_rows!(rows, s, section::Node, lang, ::Val)
 end
 
 # A table row is one line: a cell renders `<br>` as inline HTML (see `_md` for
-# `:br`), folds any other line break (block content, multi-line text) into
-# `<br>`, and escapes `|` so it cannot split the cell, including inside code.
+# `:br`), folds any other line break (block content, multi-line text, a hard
+# break `\` with its line ending) into `<br>`, and escapes `|` so it cannot
+# split the cell, including inside code.
 # The cell's children share one stream, so blocks among them are delimited.
 # A cell whose language (its own, else its row's) differs from the table's is
 # a language span. The ids waiting in `anchors` (its section's and row's) and
@@ -962,7 +998,7 @@ function _md_cell_text(f, s::_MDStream, lang, anchor)
     t = _MDStream(IOContext(buf, :md_table_cell => true); lang, targets=s.targets)
     t.anchor = anchor
     f(t)
-    replace(replace(strip(String(take!(buf))), r"\s*\n\s*" => "<br>"), "|" => "\\|")
+    replace(replace(strip(String(take!(buf))), r"(?:\\\n|\s*\n)\s*" => "<br>"), "|" => "\\|")
 end
 
 function _table_to_markdown(io::_MDStream, table::Node)
@@ -1513,6 +1549,7 @@ _md_to_node(b::Markdown.Bold) = h.strong(_md_inline_to_node.(b.text)...)
 _md_to_node(i::Markdown.Italic) = h.em(_md_inline_to_node.(i.text)...)
 _md_to_node(c::Markdown.Code) = c.language == "" ? h.code(c.code) : h.pre(h.code(c.code))
 _md_to_node(l::Markdown.Link) = h.a(href=l.url)(_md_inline_to_node.(l.text)...)
+_md_to_node(::Markdown.LineBreak) = h.br()
 _md_to_node(hdr::Markdown.Header{1}) = h.h1(_md_inline_to_node.(hdr.text)...)
 _md_to_node(hdr::Markdown.Header{2}) = h.h2(_md_inline_to_node.(hdr.text)...)
 _md_to_node(hdr::Markdown.Header{3}) = h.h3(_md_inline_to_node.(hdr.text)...)
