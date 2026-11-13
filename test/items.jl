@@ -951,6 +951,68 @@ or a vector's elements; inside a link it stays inline.
 end
 
 """
+Discovering link targets and header layout evaluates foreign renderers once
+per occurrence. Captured nodes still render in their final Markdown context,
+and IO properties that change between discovery and emission are respected.
+"""
+@testitem "markdown - foreign rendering is reused within one render" setup=[HTMXTestHelpers] tags=[:unit, :markdown] begin
+    struct Counted
+        calls::Base.RefValue{Int}
+        content
+    end
+    function Base.show(io::IO, m::MIME"text/markdown", x::Counted)
+        x.calls[] += 1
+        show(io, m, x.content)
+    end
+    calls = Ref(0)
+    wrapped = Counted(calls, h.a("go"; href="#t"))
+    node = h.div(h.p(id="t")("target"), wrapped)
+    @test to_md(node) == "::: {#t}\n\ntarget\n\n:::\n\n[go](#t)"
+    @test calls[] == 1
+    @test node.children[2] === wrapped
+    to_md(node)
+    @test calls[] == 2  # capture is local to one render
+    calls[] = 0
+    @test to_md(h.span(wrapped, wrapped)) == "[go](#t)[go](#t)"
+    @test calls[] == 2  # occurrences are independent
+
+    calls[] = 0
+    deep = foldl((node, _) -> h.header(node), 1:32; init=Counted(calls, h.span("title")))
+    @test to_md(deep) == "### title\n"
+    @test calls[] == 1
+    calls[] = 0
+    @test to_md(h.h2(Counted(calls, h.span("a", h.br(), "b")))) == "## a b\n"
+    @test calls[] == 1
+    @test to_md(h.ul(h.li(Counted(Ref(0), h.div(lang="en")("word"))))) ==
+        "- [word]{lang=\"en\"}\n"
+
+    struct Contextual end
+    Base.show(io::IO, ::MIME"text/markdown", ::Contextual) =
+        print(io, get(io, :md_table_cell, false) ? "cell" : "body")
+    @test to_md(h.p(Contextual())) == "body\n\n"
+    @test to_md(h.table(h.tr(h.th("x")), h.tr(h.td(Contextual())))) ==
+        "| x |\n| --- |\n| cell |\n\n"
+
+    struct WithContext end
+    Base.show(io::IO, m::MIME"text/markdown", ::WithContext) =
+        show(IOContext(io, :md_table_cell => true), m, h.span(Contextual()))
+    @test to_md(h.div(WithContext())) == "cell"
+
+    struct SplitLink end
+    function Base.show(io::IO, m::MIME"text/markdown", ::SplitLink)
+        print(io, "[go](#")
+        show(io, m, h.span("t"))
+        print(io, ')')
+    end
+    @test to_md(h.div(h.p(id="t")("target"), SplitLink())) ==
+        "::: {#t}\n\ntarget\n\n:::\n\n[go](#t)"
+
+    struct Broken end
+    Base.show(io::IO, ::MIME"text/markdown", ::Broken) = error("broken renderer")
+    @test_throws ErrorException to_md(h.header(Broken()))
+end
+
+"""
 An image is inline, as in HTML, and its alt text is a Pandoc attribute rather
 than the image description: a described image alone in its paragraph is a
 Pandoc implicit figure, whose caption Quarto takes from the description while

@@ -356,8 +356,7 @@ Base.show(io::IO, ::MIME"text/markdown", val) = print(io, string(val))
 Base.show(io::IO, ::MIME"text/markdown", val::AbstractString) = print(io, val)
 
 # Arrays: render each element as siblings, the way a node's children render
-Base.show(io::IO, m::MIME"text/markdown", val::AbstractArray) =
-    (s = _md_stream(io, m, val); foreach(v -> _md_child(s, m, v), val))
+Base.show(io::IO, m::MIME"text/markdown", val::AbstractArray) = _md_show(io, m, val)
 
 # Block boundaries. Containers (div, nav, main, ...) mix inline runs and block
 # elements, so a block can follow inline text on the same line
@@ -382,11 +381,118 @@ mutable struct _MDStream{T<:IO} <: IO
     lang::String   # language of the enclosing content; "" = not declared
     targets::Set{String}  # ids that in-page links of the document point at
     anchor::Bool   # the output so far ends with an id anchor `[]{#…}`
+    probe::Bool    # stop a layout probe as soon as a block is found
 end
-_MDStream(io::IO; inline=0, line=0, code=0, item=0, lang="", targets=Set{String}()) =
-    _MDStream(io, 2, false, false, 0, inline, line, code, 0, item, 0, nothing, :none, lang, targets, false)
-_md_stream(io::_MDStream, m, x) = io
-_md_stream(io::IO, m, x) = _MDStream(io; targets=_md_link_targets(io, m, x))
+_MDStream(io::IO; inline=0, line=0, code=0, item=0, lang="", targets=Set{String}(), probe=false) =
+    _MDStream(io, 2, false, false, 0, inline, line, code, 0, item, 0, nothing, :none, lang, targets, false, probe)
+
+# Foreign show methods are evaluated once per occurrence while discovering
+# links. Capture writes and Node emissions separately: nodes must still render
+# in their final block/list/table/language context, not into an early string.
+# Everything captured belongs to this render; neither input nodes nor a global
+# object cache are mutated. Context-dependent foreign output is replayed only
+# when every IO property it inspected still has the same value.
+struct _MDRecorded
+    original::Any
+    parts::Vector{Any}
+    reads::Vector{Tuple{Any,Any,Any}}
+end
+struct _MDContext
+    value::Any
+    context::IOContext
+end
+struct _MDRecorder{T<:IO} <: IO
+    context::T
+    buffer::IOBuffer
+    parts::Vector{Any}
+    reads::Vector{Tuple{Any,Any,Any}}
+end
+_MDRecorder(io) = _MDRecorder(io, IOBuffer(), Any[], Tuple{Any,Any,Any}[])
+Base.write(io::_MDRecorder, b::UInt8) = write(io.buffer, b)
+Base.unsafe_write(io::_MDRecorder, p::Ptr{UInt8}, n::UInt) = unsafe_write(io.buffer, p, n)
+function Base.get(io::_MDRecorder, key, default)
+    value = get(io.context, key, default)
+    push!(io.reads, (key, default, value))
+    value
+end
+function _md_flush_recording(io::_MDRecorder)
+    position(io.buffer) == 0 || push!(io.parts, String(take!(io.buffer)))
+    nothing
+end
+_md_recorder(io) = nothing
+_md_recorder(io::_MDRecorder) = io
+_md_recorder(io::IOContext) = _md_recorder(io.io)
+function _md_record(io, m, x)
+    recorder = _MDRecorder(io)
+    show(recorder, m, x)
+    _md_flush_recording(recorder)
+    _MDRecorded(x, recorder.parts, recorder.reads)
+end
+function Base.show(io::IO, m::MIME"text/markdown", x::_MDRecorded)
+    if all(((key, default, value),) -> isequal(get(io, key, default), value), x.reads)
+        foreach(part -> show(io, m, part), x.parts)
+    else
+        show(io, m, x.original)
+    end
+end
+Base.show(io::IO, m::MIME"text/markdown", x::_MDContext) = show(IOContext(io, x.context), m, x.value)
+
+function _md_show(io, m, x)
+    recorder = _md_recorder(io)
+    if recorder !== nothing
+        _md_flush_recording(recorder)
+        push!(recorder.parts, io isa IOContext ? _MDContext(x, io) : x)
+        return nothing
+    end
+    targets = Set{String}()
+    prepared = get(io, :md_verbatim, false) || get(io, :md_scan, false) ? x :
+        _md_prepare(io, m, x, targets)
+    _md_emit(_MDStream(io; targets), m, prepared)
+end
+_md_show(io::_MDStream, m, x) = _md_emit(io, m, x)
+_md_emit(s, m, n::Node) = _md_node(s, m, n)
+_md_emit(s, m, xs::AbstractArray) = foreach(x -> _md_child(s, m, x), xs)
+
+function _md_prepare(io, m, n::Node, targets)
+    targets !== nothing && tag(n) === :a &&
+        _md_push_target!(targets, get(attrs(n), :href, nothing))
+    kids = children(n)
+    prepared = nothing
+    for (i, child) in enumerate(kids)
+        value = _md_prepare(io, m, child, targets)
+        if value !== child
+            prepared === nothing && (prepared = copy(kids))
+            prepared[i] = value
+        end
+    end
+    prepared === nothing ? n : Node(tag(n), attrs(n), prepared)
+end
+_md_prepare(io, m, xs::AbstractArray, targets) = map(x -> _md_prepare(io, m, x, targets), xs)
+_md_prepare(io, m, x::Number, targets) = x
+_md_prepare(io, m, x::AbstractString, targets) =
+    (targets === nothing || _md_scan_targets!(targets, x); x)
+function _md_prepare(io, m, x::_MDContext, targets)
+    _MDContext(_md_prepare(IOContext(io, x.context), m, x.value, targets), x.context)
+end
+function _md_prepare(io, m, x, targets)
+    recording = _md_record(io, m, x)
+    prepared = _MDRecorded(x, _md_prepare(io, m, recording.parts, nothing), recording.reads)
+    # Scan the combined output: a foreign renderer can build one link across
+    # several writes and nested nodes. Nested recordings are prepared without
+    # scanning, so each outer foreign subtree is replayed only once here.
+    if targets !== nothing
+        text = sprint(show, m, prepared; context=IOContext(io, :md_scan => true))
+        _md_scan_targets!(targets, text)
+    end
+    prepared
+end
+
+struct _MDBlockFound <: Exception end
+function _md_count_block(s::_MDStream)
+    s.probe && throw(_MDBlockFound())
+    s.blocks += 1
+    nothing
+end
 
 Base.get(s::_MDStream, key, default) = get(s.io, key, default)
 
@@ -396,7 +502,7 @@ Base.get(s::_MDStream, key, default) = get(s.io, key, default)
 function _md_before_write!(s::_MDStream, byte::UInt8, all_newlines::Bool)
     if s.lazy && byte != UInt8('\n')
         s.lazy = false
-        s.newlines < 2 && (s.blocks += 1; write(s.io, "\n"^(2 - s.newlines)))
+        s.newlines < 2 && (_md_count_block(s); write(s.io, "\n"^(2 - s.newlines)))
     end
     s.breaks > 0 && _md_write_breaks!(s, byte, all_newlines)
 end
@@ -452,7 +558,7 @@ end
 # opens with its own newlines); a block right after a prefix (`- `, `## `) or
 # inline opener (`**`, `[`) stays inline as before.
 function _md_block_start(s::_MDStream, close="\n\n")
-    s.blocks += 1
+    _md_count_block(s)
     _md_close_inline(s, close)
     nothing
 end
@@ -477,7 +583,7 @@ _md_blank_line(s::_MDStream) = (s.newlines < 2 && print(s, "\n"^(2 - s.newlines)
 # stay as they are. Inside content that must stay one paragraph (an inline
 # element, a heading, a figure caption) it is transparent.
 _md_container_start(s::_MDStream) =
-    (s.inline == 0 && _md_close_inline(s) && (s.blocks += 1); nothing)
+    (s.inline == 0 && _md_close_inline(s) && _md_count_block(s); nothing)
 _md_container_end(s::_MDStream) = (s.inline == 0 && (s.lazy = true; s.breaks = 0); nothing)
 _md_container(s::_MDStream, m, node) =
     (_md_container_start(s); _md_recurse(s, m, node); _md_container_end(s))
@@ -487,7 +593,7 @@ _md_inline_recurse(s::_MDStream, m, node) =
 
 # Node: dispatch by tag via _md(io, m, node, ::Val{tag}), with the node's own
 # id and language written as its kind places them (see `_md_attrs`)
-Base.show(io::IO, m::MIME"text/markdown", n::Node) = _md_node(_md_stream(io, m, n), m, n)
+Base.show(io::IO, m::MIME"text/markdown", n::Node) = _md_show(io, m, n)
 function _md_node(s::_MDStream, m, n::Node)
     v = Val(tag(n))
     id, lang = _md_link_id(s, n), _md_lang_change(s, n)
@@ -530,21 +636,8 @@ _md_own_lang(n::Node, lang) = something(_md_declared_lang(n), lang)
 #   zero-width space.
 # An id the `#` shorthand cannot spell is written `{id="…"}`.
 
-# The fragments that the in-page links of `x` point at, collected once per
-# top-level `show`: `<a href="#…">` in the node tree, and `](#…)` in the
-# Markdown of any other value, which is rendered once for this. A `<pre>` body,
-# and that rendering, write no ids.
-_md_link_targets(io, m, x) = get(io, :md_verbatim, false) || get(io, :md_scan, false) ?
-    Set{String}() : _md_link_targets!(Set{String}(), m, x)
-function _md_link_targets!(t, m, n::Node)
-    tag(n) === :a && _md_push_target!(t, get(attrs(n), :href, nothing))
-    foreach(c -> _md_link_targets!(t, m, c), children(n))
-    t
-end
-_md_link_targets!(t, m, v::AbstractArray) = (foreach(c -> _md_link_targets!(t, m, c), v); t)
-_md_link_targets!(t, m, ::Number) = t
-_md_link_targets!(t, m, x::AbstractString) = _md_scan_targets!(t, x)
-_md_link_targets!(t, m, x) = _md_scan_targets!(t, sprint(show, m, x; context=:md_scan => true))
+# Link targets are collected by preparation from both Node links and literal
+# Markdown writes. The prepared tree shares all unchanged input nodes.
 function _md_push_target!(t, href)
     h = string(something(href, ""))
     startswith(h, '#') && length(h) > 1 && push!(t, h[nextind(h, 1):end])
@@ -660,7 +753,7 @@ _md_lang_span(f, s::_MDStream, ::Nothing) = f(s)
 function _md_lang_span(f, s::_MDStream, lang)
     buf = IOBuffer()
     t = _MDStream(IOContext(buf, s.io); inline=s.inline + 1, line=s.line, code=s.code,
-                  item=s.item, lang, targets=s.targets)
+                  item=s.item, lang, targets=s.targets, probe=s.probe)
     t.anchor = s.anchor
     f(t)
     s.blocks += t.blocks
@@ -711,6 +804,7 @@ HTMX.markdown_block(::MyCard) = true
 A `Node` is a block or not by its tag; this function is not consulted for it.
 """
 markdown_block(x) = false
+markdown_block(x::_MDRecorded) = markdown_block(x.original)
 
 # Recurse into children as if the node were transparent
 _md_recurse(io, m, node) = for c in children(node)
@@ -853,9 +947,14 @@ end
 
 # Whether rendering `node`'s children starts any block element.
 function _md_has_blocks(s::_MDStream, m, node)
-    probe = _MDStream(devnull; lang=s.lang, targets=s.targets)
-    _md_recurse(probe, m, node)
-    probe.blocks > 0
+    probe = _MDStream(IOContext(devnull, s.io); lang=s.lang, targets=s.targets, probe=true)
+    try
+        _md_recurse(probe, m, node)
+        false
+    catch err
+        err isa _MDBlockFound || rethrow()
+        true
+    end
 end
 
 # Non-content tags: skip
