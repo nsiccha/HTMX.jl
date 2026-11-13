@@ -105,7 +105,13 @@ function _flatten(args)
     out
 end
 
-_filter_attrs(kwargs) = (k => (v === true ? "true" : string(v)) for (k, v) in kwargs if v !== nothing && v !== false)
+function _attributes!(out, kwargs)
+    for (k, v) in kwargs
+        v === nothing || v === false ||
+            (out[_attr_symbol(k)] = v === true ? "true" : string(v))
+    end
+    out
+end
 
 # True HTML boolean attributes: presence alone = true, so any value (incl.
 # "false") renders the attribute as set. For these, a string "false" must be
@@ -245,14 +251,14 @@ Node(tag, attrs::AbstractDict, children) =
 # and flattens positional children.
 Node(tag, args...; kwargs...) =
     Node(Symbol(tag),
-         OrderedDict{Symbol,Any}(_attr_symbol(k) => v for (k, v) in _filter_attrs(kwargs)),
+         _attributes!(OrderedDict{Symbol,Any}(), kwargs),
          _flatten(args))
 
 # Call syntax appends children / merges attributes, returning a NEW node
 # (the original's vectors and dict are left untouched).
 (n::Node)(args...; kwargs...) =
     Node(tag(n),
-         merge(attrs(n), OrderedDict{Symbol,Any}(_attr_symbol(k) => v for (k, v) in _filter_attrs(kwargs))),
+         _attributes!(copy(attrs(n)), kwargs),
          vcat(children(n), _flatten(args)))
 
 function Base.show(io::IO, m::MIME"text/html", n::Node)
@@ -1581,33 +1587,31 @@ _md_inline_to_node(x) = _md_to_node(x)
 _md_inline_to_node(l::Markdown.LaTeX) = "\\($(l.formula)\\)"
 
 _md_to_node(s::AbstractString) = s
-_md_to_node(md::Markdown.MD) = h.div(_md_to_node.(md.content)...)
-_md_to_node(p::Markdown.Paragraph) = h.p(_md_inline_to_node.(p.content)...)
-_md_to_node(b::Markdown.Bold) = h.strong(_md_inline_to_node.(b.text)...)
-_md_to_node(i::Markdown.Italic) = h.em(_md_inline_to_node.(i.text)...)
+_md_to_node(md::Markdown.MD) = h.div(_md_to_node.(md.content))
+_md_to_node(p::Markdown.Paragraph) = h.p(_md_inline_to_node.(p.content))
+_md_to_node(b::Markdown.Bold) = h.strong(_md_inline_to_node.(b.text))
+_md_to_node(i::Markdown.Italic) = h.em(_md_inline_to_node.(i.text))
 _md_to_node(c::Markdown.Code) = c.language == "" ? h.code(c.code) : h.pre(h.code(c.code))
-_md_to_node(l::Markdown.Link) = h.a(href=l.url)(_md_inline_to_node.(l.text)...)
+_md_to_node(l::Markdown.Link) = h.a(_md_inline_to_node.(l.text); href=l.url)
 _md_to_node(::Markdown.LineBreak) = h.br()
-_md_to_node(hdr::Markdown.Header{1}) = h.h1(_md_inline_to_node.(hdr.text)...)
-_md_to_node(hdr::Markdown.Header{2}) = h.h2(_md_inline_to_node.(hdr.text)...)
-_md_to_node(hdr::Markdown.Header{3}) = h.h3(_md_inline_to_node.(hdr.text)...)
-_md_to_node(hdr::Markdown.Header{4}) = h.h4(_md_inline_to_node.(hdr.text)...)
-_md_to_node(hdr::Markdown.Header{5}) = h.h5(_md_inline_to_node.(hdr.text)...)
-_md_to_node(hdr::Markdown.Header{6}) = h.h6(_md_inline_to_node.(hdr.text)...)
-_md_to_node(bq::Markdown.BlockQuote) = h.blockquote(_md_to_node.(bq.content)...)
+for level in 1:6
+    @eval _md_to_node(hdr::Markdown.Header{$level}) =
+        h($(QuoteNode(Symbol("h$level"))), _md_inline_to_node.(hdr.text))
+end
+_md_to_node(bq::Markdown.BlockQuote) = h.blockquote(_md_to_node.(bq.content))
 _md_to_node(list::Markdown.List) = begin
     tag = list.ordered == -1 ? h.ul : h.ol
-    tag([_li_for(item) for item in list.items]...)
+    tag([_li_for(item) for item in list.items])
 end
 _li_for(item) = begin
     info = _task_list_marker(item)
-    info === nothing && return h.li(_md_to_node.(item)...)
+    info === nothing && return h.li(_md_to_node.(item))
     (checked, first_inline, rest_blocks) = info
     h.li(h.input(; type="checkbox", disabled=true,
                    checked = checked ? true : nothing),
          " ",
-         _md_inline_to_node.(first_inline)...,
-         _md_to_node.(rest_blocks)...)
+         _md_inline_to_node.(first_inline),
+         _md_to_node.(rest_blocks))
 end
 # GFM task-list detection: a list item whose first inline leaf starts with
 # `[ ]`, `[x]`, or `[X]` (optionally followed by a space) renders as a
@@ -1661,13 +1665,13 @@ _md_to_node(t::Markdown.Table) = begin
         onclick = span == 1 ? "if(window.sortTable)sortTable($(i-1),this)" : nothing
         cls     = span == 1 ? "u-pointer" : nothing
         colspan = span > 1 ? span : nothing
-        h.th(; align=(al == "" ? nothing : al), colspan, onclick, class=cls)(kids...)
+        h.th(kids; align=(al == "" ? nothing : al), colspan, onclick, class=cls)
     end
     td_cell(content, a, span) = begin
         kids = _md_inline_to_node.(content)
         al = align_attr(a)
         colspan = span > 1 ? span : nothing
-        h.td(; align=(al == "" ? nothing : al), colspan)(kids...)
+        h.td(kids; align=(al == "" ? nothing : al), colspan)
     end
     header, body = t.rows[1], @view t.rows[2:end]
     n_cols = length(header)
@@ -1702,12 +1706,12 @@ _md_to_node(t::Markdown.Table) = begin
     end
     tr_for(i, cells) = begin
         children = [td_cell(c, get(t.align, idx, :l), span) for (c, span, idx) in cells]
-        row_ids[i] === nothing ? h.tr(children...) : h.tr(; id=row_ids[i])(children...)
+        h.tr(children; id=row_ids[i])
     end
     thead = h.thead(h.tr([th_cell(c, get(t.align, idx, :l), idx, span)
-                          for (c, span, idx) in collapse_empties(header)]...))
-    tbody = h.tbody([tr_for(i, cells) for (i, cells) in enumerate(body_collapsed)]...)
-    h.table(; class="htmxo-sortable-table")(thead, tbody)
+                          for (c, span, idx) in collapse_empties(header)]))
+    tbody = h.tbody([tr_for(i, cells) for (i, cells) in enumerate(body_collapsed)])
+    h.table(thead, tbody; class="htmxo-sortable-table")
 end
 _md_to_node(l::Markdown.LaTeX) = "\$\$$(l.formula)\$\$"
 _md_to_node(x) = string(x)
