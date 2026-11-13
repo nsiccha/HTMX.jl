@@ -411,6 +411,51 @@ post-processing transform.
     @test result == "HELLO"
 end
 
+"""
+Array conversion preserves element order, empty separators, custom dispatch
+and one final wrap, including when a nested array defines its own conversion.
+"""
+@testitem "auto - arrays preserve dispatch and wrapping" setup=[HTMXTestHelpers] tags=[:unit, :auto] begin
+    struct CustomValue end
+    HTMX.auto(::CustomValue; wrap) = wrap("custom-value")
+    struct CustomArray <: AbstractVector{String} end
+    Base.size(::CustomArray) = (1,)
+    Base.getindex(::CustomArray, ::Int) = "unconverted-array-element"
+    HTMX.auto(::CustomArray; wrap) = wrap("custom-array")
+
+    values = Any["raw<b>x</b>", h.p("a & b"), CustomValue(), CustomArray(),
+                 [h.span("nested"), "text"]]
+    calls = Ref(0)
+    wrapped = auto(values; wrap=x -> (calls[] += 1; "BEGIN\n" * x * "\nEND"))
+    @test wrapped == "BEGIN\nraw<b>x</b>\n<p>a &amp; b</p>\ncustom-value\ncustom-array\n<span>nested</span>\ntext\nEND"
+    @test calls[] == 1
+    @test auto(Any[]; wrap=identity) == ""
+    @test auto([String[], String[], [""]]; wrap=identity) == "\n\n"
+    @test auto(reshape([h.span(string(i)) for i in 1:4], 2, 2); wrap=identity) ==
+        "<span>1</span>\n<span>2</span>\n<span>3</span>\n<span>4</span>"
+
+    row = h.tr(h.td("original"); class="row")
+    attributes, children = copy(HTMX.attrs(row)), copy(HTMX.children(row))
+    @test auto(Any[row => "target", "plain" => "slot"]; wrap=identity) ==
+        "<template><tr class=\"row\" id=\"target\" hx-swap-oob=\"true\"><td>original</td></tr></template>\n<div id=\"slot\" hx-swap-oob=\"true\">plain</div>"
+    @test HTMX.attrs(row) == attributes
+    @test HTMX.children(row) == children
+end
+
+"""
+Foreign HTML children observe the same stream position in an array element as
+in a standalone rendering. Shorter later nodes never inherit earlier bytes.
+"""
+@testitem "auto - node arrays preserve independent rendering" setup=[HTMXTestHelpers] tags=[:unit, :auto] begin
+    struct PositionChild end
+    Base.show(io::IO, ::MIME"text/html", ::PositionChild) = print(io, position(io))
+    nodes = [h.p(repeat("long", 100)), h.p(PositionChild()), h.div(),
+             h.span(PositionChild()), h.p("é & <x>")]
+    @test auto(nodes; wrap=identity) == join(repr.(Ref(MIME"text/html"()), nodes), "\n")
+    @test auto([h.p(PositionChild()), h.p(PositionChild())]; wrap=identity) ==
+        "<p>3</p>\n<p>3</p>"
+end
+
 # ================================================================
 # Node primitive (owned by HTMX.jl — no Cobweb wrapper)
 # ================================================================
@@ -1306,6 +1351,22 @@ String-shaped result callers receive for HTML and Markdown.
     rendered = repr("application/vnd.hyperview+xml", h.div())
     @test rendered isa String
     @test rendered == "<view style=\"div\"></view>"
+end
+
+"""
+Class tokens retain their order, normalize Unicode whitespace and escape XML
+metacharacters; empty classes add no separator after the semantic tag.
+"""
+@testitem "hxml - class tokens preserve whitespace and escaping" setup=[HTMXTestHelpers] tags=[:unit, :hxml] begin
+    for cls in ("", " \t\n\u2003")
+        @test hxml(h.div("x"; class=cls)) == "<view style=\"div\"><text>x</text></view>"
+    end
+    @test hxml(h.div("x"; class=" a\tb  c\n d\u2003e ")) ==
+        "<view style=\"div a b c d e\"><text>x</text></view>"
+    @test hxml(h.span("x"; class="a&b <q>")) ==
+        "<text style=\"span a&amp;b &lt;q&gt;\">x</text>"
+    @test hxml(Node(:div, Dict(:class => 42), ["x"])) ==
+        "<view style=\"div 42\"><text>x</text></view>"
 end
 
 """

@@ -782,7 +782,8 @@ _push_cell_text!(cells, s, ::Any, lang, anchors) = nothing
 function _push_cell_text!(cells, s::_MDStream, c::Node, lang, anchors)
     lang = _md_own_lang(c, lang)
     append!(anchors, _md_link_ids(s, c))
-    prefix = _md_cell_text(t -> foreach(id -> _md_anchor(t, id), anchors), s, lang, false)
+    prefix = isempty(anchors) ? "" :
+        _md_cell_text(t -> foreach(id -> _md_anchor(t, id), anchors), s, lang, false)
     text = _md_cell_text(t -> _md_recurse(t, _md_mime, c), s, lang, !isempty(anchors))
     empty!(anchors)
     push!(cells, prefix * (isempty(text) || _md_same_lang(lang, s.lang) ? text : _md_lang_span_text(text, lang)))

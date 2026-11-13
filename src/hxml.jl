@@ -149,12 +149,19 @@ function _hxml_print_style(io, node, styleid)
         print(io, styleid); need_sep = true
     end
     if cls !== nothing
-        for tok in split(string(cls))
-            need_sep && print(io, ' ')
-            _xml_escape(io, tok); need_sep = true
-        end
+        _hxml_class_tokens(io, string(cls), need_sep)
     end
     print(io, '"')
+end
+
+# Attribute values are heterogeneous. Specialize token iteration after string
+# conversion so eachsplit's state stays concrete without allocating a vector.
+function _hxml_class_tokens(io, cls::AbstractString, need_sep)
+    for tok in eachsplit(cls)
+        need_sep && print(io, ' ')
+        _xml_escape(io, tok)
+        need_sep = true
+    end
 end
 
 # Print id="…" if the node carries one (needed as a <behavior> target).

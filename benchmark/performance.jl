@@ -38,6 +38,16 @@ for (label, mime) in (("HTML", MIME"text/html"()), ("Markdown", MIME"text/markdo
     warm(() -> repr(mime, big), "table $label")
 end
 warm(table, "construct table 1000x8")
+for n in (1000, 5000)
+    pieces = [h.p("piece $i & <value>"; class="piece") for i in 1:n]
+    output = firstcall(() -> auto(pieces; wrap=identity), "auto $n nodes")
+    println("OUTPUT auto-$n bytes=$(sizeof(output)) sha256=$(bytes2hex(sha256(output)))")
+    warm(() -> auto(pieces; wrap=identity), "auto $n nodes")
+end
+styled = h.div([h.span("piece $i"; class=" a\tb  c\n d\u2003e ") for i in 1:1000])
+styled_output = firstcall(() -> repr(MIME"application/vnd.hyperview+xml"(), styled), "HXML multiple classes")
+println("OUTPUT HXML-classes bytes=$(sizeof(styled_output)) sha256=$(bytes2hex(sha256(styled_output)))")
+warm(() -> repr(MIME"application/vnd.hyperview+xml"(), styled), "HXML multiple classes")
 source = join(["Paragraph $i **bold** [link](https://example.org) and `code`.\n" for i in 1:500], "\n")
 ast = Markdown.parse(source)
 firstcall(() -> md_to_node(ast), "convert 500 paragraphs")

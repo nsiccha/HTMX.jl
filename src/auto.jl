@@ -14,7 +14,30 @@ web frameworks built on top of HTMX.jl typically inject their own wrapper.
 """
 auto(x; wrap) = wrap(repr("text/html", x))
 auto(x::AbstractString; wrap) = wrap(x)
-auto(x::AbstractArray; wrap) = wrap(join(auto.(x; wrap=identity), "\n"))
+function auto(xs::AbstractArray; wrap)
+    io = IOBuffer()
+    buffer = IOBuffer()
+    first = true
+    for x in xs
+        first || print(io, '\n')
+        _auto_write(io, buffer, x)
+        first = false
+    end
+    wrap(String(take!(io)))
+end
+
+# Keep public auto dispatch for foreign values, pairs and nested arrays. Nodes
+# reuse one staging buffer instead of allocating a repr string for each item.
+# Reset it for each node so foreign HTML children still see the same stream
+# position as in an independent repr call, including after a shorter item.
+_auto_write(io, buffer, x) = print(io, auto(x; wrap=identity))
+function _auto_write(io, buffer, x::Node)
+    truncate(buffer, 0)
+    seekstart(buffer)
+    show(buffer, MIME"text/html"(), x)
+    seekstart(buffer)
+    write(io, buffer)
+end
 
 # Table elements (tr, td, th, thead, tbody, tfoot) are silently stripped by
 # the browser's innerHTML parser when they lack proper parent context.
