@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Reuse buffers when converting node arrays to HTML, retaining custom `auto`
+  dispatch for foreign values and nested arrays.
+- Avoid rendering empty Markdown table anchor prefixes and stream HXML class
+  tokens without intermediate vectors.
+
 ## 1.1.1
 
 - Require Julia 1.10 or newer for streaming string replacement.

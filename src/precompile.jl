@@ -41,6 +41,7 @@ using PrecompileTools: @setup_workload, @compile_workload
             repr(MIME"application/vnd.hyperview+xml"(), node)
         end
         auto(paragraph; wrap=identity)
+        auto([paragraph, table]; wrap=identity)
         auto(table => "table-slot"; wrap=identity)
     end
 end
