@@ -324,6 +324,43 @@ Multiple `HyperscriptString` children concatenate into a single `_` attribute.
 end
 
 """
+Rendering preserves attribute order and the input containers, including exact-
+parts nodes with both spellings of the hyperscript attribute. Fragment assembly
+allocates linearly instead of copying the growing prefix for every fragment.
+"""
+@testitem "Hyperscript streaming preserves inputs and scales linearly" setup=[HTMXTestHelpers] tags=[:unit, :hyperscript, :escaping] begin
+    using OrderedCollections: OrderedDict
+    hs = HTMX.HyperscriptString("on click log '<&>'")
+    a = OrderedDict{Symbol,Any}(:id => "x", :_ => "old", :class => "c", :- => "new")
+    kids = Any["before", hs, h.span("after")]
+    node = Node(:div, a, kids)
+    original_a, original_kids = copy(a), copy(kids)
+    expected = "<div id=\"x\" _=\"new\non click log &#39;&lt;&amp;&gt;&#39;\" class=\"c\">before<span>after</span></div>"
+    @test html(node) == html(node) == expected
+    @test a == original_a && kids == original_kids
+    @test html(h.div("body", hs; _="start", id="x")) ==
+        "<div id=\"x\" _=\"start\non click log &#39;&lt;&amp;&gt;&#39;\">body</div>"
+    small = h.div(fill(hs, 400))
+    large = h.div(fill(hs, 800))
+    html(small); html(large)
+    @test (@allocated html(large)) < 3 * (@allocated html(small))
+end
+
+"""
+HTML and XML stream exactly-once escaping for Unicode, existing entities and
+special characters, while keeping their different apostrophe spellings.
+"""
+@testitem "Streaming escaping preserves HTML and XML text" setup=[HTMXTestHelpers] tags=[:unit, :escaping, :hxml] begin
+    source = "Grüße 世界 😀 &amp; < > \" '"
+    @test html(h.p(source; title=source)) ==
+        "<p title=\"Grüße 世界 😀 &amp;amp; &lt; &gt; &quot; &#39;\">Grüße 世界 😀 &amp;amp; &lt; &gt; &quot; &#39;</p>"
+    @test hxml(h.p(source)) ==
+        "<text style=\"p\">Grüße 世界 😀 &amp;amp; &lt; &gt; &quot; &apos;</text>"
+    @test hxml(h.img(; src=source)) ==
+        "<image style=\"img\" source=\"Grüße 世界 😀 &amp;amp; &lt; &gt; &quot; &apos;\" />"
+end
+
+"""
 The `@__str` string macro constructs a `HyperscriptString` literal.
 """
 @testitem "@__str macro" setup=[HTMXTestHelpers] tags=[:unit, :hyperscript] begin

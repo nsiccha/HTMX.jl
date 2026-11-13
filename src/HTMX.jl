@@ -105,10 +105,6 @@ function _flatten(args)
     out
 end
 
-# filter! predicate: keep non-HyperscriptString children; absorb HyperscriptStrings into the `_` attr
-_absorb_hyperscript!(attrs, tag::HyperscriptString) =
-    (attrs[:(_)] = get(attrs, :(_), "") * "\n" * tag; false)
-_absorb_hyperscript!(attrs, _) = true
 _filter_attrs(kwargs) = (k => (v === true ? "true" : string(v)) for (k, v) in kwargs if v !== nothing && v !== false)
 
 # True HTML boolean attributes: presence alone = true, so any value (incl.
@@ -147,12 +143,9 @@ _attr_symbol(k) = Symbol(replace(string(k), '_' => '-'))
 
 # HTML entity escaping for `&`, `"`, `'`, `<`, `>` (formerly `Cobweb.escape`).
 const _ESCAPE_PAIRS = ('&' => "&amp;", '"' => "&quot;", '\'' => "&#39;", '<' => "&lt;", '>' => "&gt;")
-function escape(x::AbstractString)
-    for pat in _ESCAPE_PAIRS
-        x = replace(x, pat)
-    end
-    x
-end
+escape(x::AbstractString) = replace(x, _ESCAPE_PAIRS...)
+_escape(io::IO, x::AbstractString, pairs) = replace(io, x, pairs...)
+_html_escape(io::IO, x::AbstractString) = _escape(io, x, _ESCAPE_PAIRS)
 
 """
     Raw(html::AbstractString)
@@ -263,26 +256,50 @@ Node(tag, args...; kwargs...) =
          vcat(children(n), _flatten(args)))
 
 function Base.show(io::IO, m::MIME"text/html", n::Node)
-    # Render off copies so the node itself is never mutated by hyperscript
-    # absorption.
-    a = copy(attrs(n))
-    kids = copy(children(n))
-    # `_` arrives hyphenated (see `_attr_symbol`); restore it for output.
-    haskey(a, :(-)) && (a[:(_)] = pop!(a, :(-)))
-    filter!(child -> _absorb_hyperscript!(a, child), kids)
+    a, kids = attrs(n), children(n)
+    has_script = any(c -> c isa HyperscriptString, kids)
     print(io, '<', tag(n))
     for (k, v) in a
+        # A normalized `_` attribute is moved to the end, unless the exact-
+        # parts constructor supplied an existing `_` slot to replace.
+        k === :(-) && continue
+        if k === :(_)
+            _html_hyperscript(io, a, kids, has_script)
+            continue
+        end
         # Omit string-valued "false" ONLY for true boolean attributes; for
         # enumerated/ARIA attributes "false" is meaningful and must render.
         v == "false" && k in _BOOLEAN_ATTRS && continue
-        print(io, ' ', k, '=', '"', escape(string(v)), '"')
+        print(io, ' ', k, '=', '"')
+        _html_escape(io, string(v))
+        print(io, '"')
     end
+    !haskey(a, :(_)) && (haskey(a, :(-)) || has_script) &&
+        _html_hyperscript(io, a, kids, has_script)
     print(io, '>')
     for child in kids
-        showable("text/html", child) ? show(io, m, child) : print(io, escape(string(child)))
+        _html_child(io, m, child)
     end
     tag(n) in VOID_ELEMENTS || print(io, "</", tag(n), '>')
 end
+
+# Each fragment goes straight to the destination, so concatenation is linear
+# and rendering never mutates the node's attributes or children.
+function _html_hyperscript(io, a, kids, has_script)
+    print(io, " _=\"")
+    _html_escape(io, string(get(a, :(-), get(a, :(_), ""))))
+    if has_script
+        for c in kids
+            c isa HyperscriptString || continue
+            print(io, '\n')
+            _html_escape(io, c)
+        end
+    end
+    print(io, '"')
+end
+_html_child(io, m, child::Node) = show(io, m, child)
+_html_child(io, m, ::HyperscriptString) = nothing
+_html_child(io, m, child) = showable(m, child) ? show(io, m, child) : _html_escape(io, string(child))
 
 # Table elements (tr, td, th, thead, tbody, tfoot) are silently stripped by
 # the browser's innerHTML parser when they lack proper parent context.
@@ -1086,17 +1103,13 @@ Base.istextmime(::MIME{Symbol("application/vnd.hyperview+xml")}) = true
 # XML escaping for element text and double-quoted attribute values. Note the
 # apostrophe → &apos; (XML), distinct from the HTML serializer's &#39;.
 const _XML_ESCAPE_PAIRS = ('&' => "&amp;", '<' => "&lt;", '>' => "&gt;", '"' => "&quot;", '\'' => "&apos;")
-function _xml_escape(x::AbstractString)
-    for pat in _XML_ESCAPE_PAIRS
-        x = replace(x, pat)
-    end
-    x
-end
+_xml_escape(x::AbstractString) = replace(x, _XML_ESCAPE_PAIRS...)
+_xml_escape(io::IO, x::AbstractString) = _escape(io, x, _XML_ESCAPE_PAIRS)
 
 # Entry points (mirror the text/markdown block above).
 # Fallback: any non-Node value renders as its XML-escaped string form.
-Base.show(io::IO, ::MIME"application/vnd.hyperview+xml", val) = print(io, _xml_escape(string(val)))
-Base.show(io::IO, ::MIME"application/vnd.hyperview+xml", val::AbstractString) = print(io, _xml_escape(val))
+Base.show(io::IO, ::MIME"application/vnd.hyperview+xml", val) = _xml_escape(io, string(val))
+Base.show(io::IO, ::MIME"application/vnd.hyperview+xml", val::AbstractString) = _xml_escape(io, val)
 # Hyperscript is browser-side JS — meaningless to a native client, so drop it.
 Base.show(io::IO, ::MIME"application/vnd.hyperview+xml", ::HyperscriptString) = nothing
 # Arrays: render each element.
@@ -1199,16 +1212,20 @@ function _hxml_print_style(io, node, styleid)
     if cls !== nothing
         for tok in split(string(cls))
             need_sep && print(io, ' ')
-            print(io, _xml_escape(tok)); need_sep = true
+            _xml_escape(io, tok); need_sep = true
         end
     end
     print(io, '"')
 end
 
 # Print id="…" if the node carries one (needed as a <behavior> target).
-_hxml_print_id(io, node) = let id = get(attrs(node), :id, nothing)
-    id === nothing || print(io, " id=\"", _xml_escape(string(id)), '"')
+function _xml_attribute(io, key, value)
+    value === nothing && return
+    print(io, ' ', key, "=\"")
+    _xml_escape(io, string(value))
+    print(io, '"')
 end
+_hxml_print_id(io, node) = _xml_attribute(io, :id, get(attrs(node), :id, nothing))
 
 # Open tag: <hxtag id=… style=… extra…>. `extra` = pairs of (name, value); each
 # value is XML-escaped, and a `nothing` value skips the attribute. `selfclose`
@@ -1218,8 +1235,7 @@ function _hxml_open(io, node, hxtag; styleid=nothing, extra=(), selfclose=false)
     _hxml_print_id(io, node)
     _hxml_print_style(io, node, styleid)
     for (k, v) in extra
-        v === nothing && continue
-        print(io, ' ', k, "=\"", _xml_escape(string(v)), '"')
+        _xml_attribute(io, k, v)
     end
     print(io, selfclose ? " />" : ">")
 end
@@ -1306,10 +1322,11 @@ end
 # both serialize identically. Self-closing leaf; href omits when absent (back /
 # close / new carry none), verb omits when GET or absent.
 function _hxml_behavior_tag(io; trigger, action, href=nothing, verb=nothing, target=nothing, delay=nothing)
-    print(io, "<behavior trigger=\"", trigger, "\" action=\"", _xml_escape(string(action)), '"')
-    href === nothing || print(io, " href=\"", _xml_escape(string(href)), '"')
+    print(io, "<behavior trigger=\"", trigger, '"')
+    _xml_attribute(io, :action, action)
+    _xml_attribute(io, :href, href)
     (verb === nothing || verb == "GET") || print(io, " verb=\"", verb, '"')
-    target === nothing || print(io, " target=\"", _xml_escape(string(target)), '"')
+    _xml_attribute(io, :target, target)
     delay === nothing || print(io, " delay=\"", delay, '"')
     print(io, " />")
 end
@@ -1426,7 +1443,8 @@ _hxml_form_submit() = get(task_local_storage(), :hxml_form_submit, nothing)
 function _hxml(io, m, node::Node, ::Val{:navigator})
     print(io, "<navigator")
     _hxml_print_id(io, node)
-    print(io, " type=\"", _xml_escape(string(get(attrs(node), :type, "stack"))), "\">")
+    _xml_attribute(io, :type, get(attrs(node), :type, "stack"))
+    print(io, '>')
     _hxml_recurse(io, m, node)
     print(io, "</navigator>")
 end
@@ -1436,7 +1454,7 @@ function _hxml(io, m, node::Node, ::Val{Symbol("nav-route")})
     print(io, "<nav-route")
     _hxml_print_id(io, node)
     href = get(attrs(node), :href, nothing)
-    href === nothing || print(io, " href=\"", _xml_escape(string(href)), '"')
+    _xml_attribute(io, :href, href)
     if isempty(children(node))
         print(io, " />")
     else
@@ -1484,7 +1502,8 @@ _hxml_input(io, node, ::Val{:hidden})    = _hxml_field(io, node, "text-field"; e
 function _hxml_input(io, node, ::Val{:submit})
     _hxml_open(io, node, "text"; styleid="submit")
     _hxml_behavior(io, node; fallback_form=_hxml_form_submit())
-    print(io, _xml_escape(string(get(attrs(node), :value, "Submit"))), "</text>")
+    _xml_escape(io, string(get(attrs(node), :value, "Submit")))
+    print(io, "</text>")
 end
 
 # <textarea> → <text-area name>value</text-area> (value = its text children).
