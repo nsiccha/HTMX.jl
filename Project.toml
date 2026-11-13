@@ -1,16 +1,18 @@
 name = "HTMX"
 uuid = "27f3e1ef-6ef8-44dc-9e9a-2fb23ed44e83"
 authors = ["Nikolas Siccha <nikolassiccha@gmail.com>"]
-version = "1.1.0"
+version = "1.1.1"
 
 [deps]
 Markdown = "d6f4376e-aef5-505a-96c1-9c027394607a"
 OrderedCollections = "bac558e1-5e72-5ebc-8fee-abe8a469f55d"
+PrecompileTools = "aea7be01-6a6a-4083-8856-8a6e6704d82a"
 
 [compat]
 OrderedCollections = "1"
+PrecompileTools = "1"
 TestItemRunner = "1"
-julia = "1"
+julia = "1.10"
 
 [extras]
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
