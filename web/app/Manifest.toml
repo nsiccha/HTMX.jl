@@ -101,10 +101,10 @@ version = "0.1.11"
 uuid = "7b1f6079-737a-58dc-b8bc-7a2ca5c1b5ee"
 
 [[deps.HTMX]]
-deps = ["Markdown", "OrderedCollections", "PrecompileTools"]
+deps = ["Markdown", "OrderedCollections", "PrecompileTools", "ScopedValues"]
 path = "../.."
 uuid = "27f3e1ef-6ef8-44dc-9e9a-2fb23ed44e83"
-version = "1.1.1"
+version = "1.3.0"
 
 [[deps.HTMXObjects]]
 deps = ["CodecZlib", "CommonMark", "Dates", "DynamicObjects", "HTMX", "HTTP", "LazyArtifacts", "LibGit2", "Random", "Sockets", "Tables"]

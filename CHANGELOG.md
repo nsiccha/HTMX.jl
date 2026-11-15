@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.3.0
+
+- Add `HTMX.with_markdown_seams(f, on::Bool)` and `HTMX.markdown_seams()`
+  (public, not exported). Inside `with_markdown_seams(f, false)` Markdown
+  writes every `<article>` and `<section>` as a `<div>` is, without the
+  leading `---` seam, which Pandoc reads as a horizontal rule in a PDF. A
+  linked `id` still goes on the opening heading or a fenced div, a `lang`
+  still becomes a fenced div, and an `<hr>` still writes `---`. The setting
+  is a scoped value: every Markdown render inside `f` sees it, fresh renders
+  in a value's own `show` and spawned tasks included, and a nested
+  `with_markdown_seams(g, true)` switches the seam back on. The default is
+  on, so output without the switch is unchanged.
+- Depend on ScopedValues.jl (1.6), which uses `Base.ScopedValues` on Julia
+  1.11 and newer.
+
 ## 1.2.1
 
 - In Markdown, a `<p>` inside content that must stay one paragraph (a link or

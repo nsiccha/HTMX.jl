@@ -1498,6 +1498,62 @@ writes a linked id of its own, is a fenced div instead.
 end
 
 """
+`HTMX.with_markdown_seams(f, false)` writes every `<article>` and `<section>`
+inside `f` as a `<div>` is, without the leading `---` seam (which Pandoc turns
+into a horizontal rule in a PDF). Its linked id still goes on the opening
+heading, else a fenced div, and its own `lang` is still a fenced div; an `<hr>`
+still writes `---`. The setting is a scoped value, so a fresh render inside a
+value's own `show` and a spawned task see it, and a nested
+`with_markdown_seams(g, true)` writes the seam again. Requested by HTMXObjects
+for report/PDF Markdown (todo `00xgjdx`, user decision `1o8j77d`).
+"""
+@testitem "markdown - with_markdown_seams switches the section and article seam" setup=[HTMXTestHelpers] tags=[:unit, :markdown] begin
+    # a value whose show renders its node in a fresh stream, and one that switches the seam on
+    struct Fresh; n::HTMX.Node; end
+    Base.show(io::IO, m::MIME"text/markdown", x::Fresh) = print(io, sprint(show, m, x.n))
+    struct SeamsOn; n::HTMX.Node; end
+    Base.show(io::IO, m::MIME"text/markdown", x::SeamsOn) =
+        HTMX.with_markdown_seams(() -> show(io, m, x.n), true)
+    off(f) = HTMX.with_markdown_seams(f, false)
+    go = h.a("go"; href="#t")
+    # default: on, byte-identical to the seam output
+    @test HTMX.markdown_seams() === true
+    @test to_md(h.div("intro", h.section(h.p("x")))) == "intro\n\n---\n\nx\n\n\n"
+    # off: a section or article is written as a div is
+    @test off(HTMX.markdown_seams) === false
+    @test HTMX.markdown_seams() === true
+    for tag in (:section, :article)
+        el = getproperty(h, tag)
+        @test off(() -> to_md(h.div("intro", el(h.p("x"))))) == to_md(h.div("intro", h.div(h.p("x")))) ==
+            "intro\n\nx\n\n"
+        @test off(() -> to_md(h.div(el(h.p("a")), el(h.p("b"))))) == "a\n\nb\n\n"
+    end
+    @test off(() -> to_md(h.ul(h.li(h.section(h.p("a")))))) == to_md(h.ul(h.li(h.div(h.p("a")))))
+    @test off(() -> to_md(h.header(h.section("T")))) == to_md(h.header(h.div("T"))) == "### T\n"
+    @test off(() -> to_md(h.pre(h.section("x")))) == "```\nx\n```\n"
+    # a linked id still goes on the opening heading, else on a fenced div; lang stays a fenced div
+    @test off(() -> to_md(h.div(go, h.section(id="t")(h.h2(id="h")("Eins"))))) == "[go](#t)\n\n## Eins {#t}\n"
+    @test off(() -> to_md(h.div(go, h.article(id="t")(h.h1("Eins"))))) == "[go](#t)\n\n# Eins {#t}\n"
+    @test off(() -> to_md(h.div(go, h.section(id="t")(h.p("Text"), h.h2("Später"))))) ==
+        "[go](#t)\n\n::: {#t}\n\nText\n\n## Später\n\n:::\n\n"
+    @test off(() -> to_md(h.div(go, h.section(id="t", lang="en")(h.h2("One"))))) ==
+        "[go](#t)\n\n::: {lang=\"en\"}\n\n## One {#t}\n\n:::\n\n"
+    @test off(() -> to_md(h.article(h.section(id="t")(h.h2("Eins"), h.p("Text")), h.p(h.a("zu Eins"; href="#t"))))) ==
+        "## Eins {#t}\nText\n\n[zu Eins](#t)\n\n"
+    # an <hr> is an intended rule
+    @test off(() -> to_md(h.div("text", h.hr(), "after"))) == "text\n\n---\nafter"
+    # a fresh render inside a value's own show, and a spawned task, see the setting
+    @test off(() -> to_md(Fresh(h.section(h.p("x"))))) == to_md(Fresh(h.div(h.p("x")))) == "x\n\n"
+    @test off(() -> fetch(Threads.@spawn to_md(h.section(h.p("x"))))) == "x\n\n"
+    # a nested with_markdown_seams(g, true) writes the seam again
+    @test off(() -> HTMX.with_markdown_seams(() -> to_md(h.section(h.p("x"))), true)) == to_md(h.section(h.p("x")))
+    @test off(() -> to_md(h.div("a", SeamsOn(h.section(h.p("x")))))) == "a\n\n---\n\nx\n\n\n"
+    # the result of f is returned; HTML is untouched
+    @test off(() -> 42) == 42
+    @test off(() -> repr("text/html", h.section("x"))) == repr("text/html", h.section("x"))
+end
+
+"""
 In a pipe table a linked id is an anchor at the start of a cell: a cell's own,
 and a row's or table section's at its first cell. An id that no cell follows is
 an anchor after the table. A linked table is a fenced div, which Quarto numbers

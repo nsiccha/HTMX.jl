@@ -247,7 +247,15 @@ print(sprint(show, MIME"text/markdown"(), node))
 a paragraph
 ```
 
-The `---` divider before `<article>`/`<section>` is intentional: it gives a Markdown reader a clear seam between semantic blocks. Every block element starts on its own line: inline text before it inside a container (`h.div("lead", h.h2("x"))`) is closed as a paragraph, and content after a list item starts after a blank line.
+The `---` divider before `<article>`/`<section>` is intentional: it gives a Markdown reader a clear seam between semantic blocks. Where it is not wanted, such as Markdown that becomes a PDF (Pandoc reads `---` as a horizontal rule), `HTMX.with_markdown_seams(f, false)` (public, not exported) writes every `<article>` and `<section>` inside `f()` as a `<div>` is, with no seam. Their linked `id` and `lang` are written as with the seam, and an `<hr>` still writes `---`. The setting is a scoped value, so it reaches every Markdown render inside `f`, including a fresh `repr("text/markdown", x)` in a value's own `show`. A nested `with_markdown_seams(g, true)` writes the seam again, and `HTMX.markdown_seams()` reads the current setting:
+
+```julia
+HTMX.with_markdown_seams(false) do
+    repr("text/markdown", h.div("intro", h.section(h.p("x"))))
+end   # "intro\n\nx\n\n", where the default writes "intro\n\n---\n\nx\n\n\n"
+```
+
+Every block element starts on its own line: inline text before it inside a container (`h.div("lead", h.h2("x"))`) is closed as a paragraph, and content after a list item starts after a blank line.
 
 A block container (`div`, `nav`, `dl`, …) is a paragraph boundary, as in HTML: `h.div(h.div("one"), h.div("two"))` renders `"one\n\ntwo"`, not `"onetwo"`. It adds no blank line at the end of the output. Inside content that must stay one paragraph — the text of a link or other inline element, a heading, a figure caption — containers stay transparent, so `h.a(h.div("card"), h.div("sub"))` is still one link. A paragraph there, where a blank line would end that content, is set off by a line break, written as a `<br>` is: `h.a(h.p("Title"), h.p("Subtitle"); href="/x")` renders `"[Title\\\nSubtitle](/x)"`, a heading gets a space instead and a table cell `<br>`.
 
@@ -310,7 +318,7 @@ Conversion table:
 | `a`                               | `[text](href)`; without a target (no `href`, as on an htmx-only `h.a("x"; hx_get=…)`, or `href=""`/`"#"`) just its content, like a `span` |
 | `br`                              | hard line break, a `\` ending the line (a bare newline would be a soft break, joined with a space); nothing where it ends a paragraph or block, a space in a heading, `<br>` in a table cell |
 | `strong`/`b`, `em`/`i`, `code`    | `**…**`, `*…*`, `` `…` `` |
-| `article`, `section`              | wrapped in `---` dividers |
+| `article`, `section`              | wrapped in `---` dividers; inside `HTMX.with_markdown_seams(f, false)` written as a `div` is |
 | `header`                          | `### ` when inline-only; its own blocks (heading, nav, …) unprefixed |
 | any element with a linked `id`    | `::: {#id}` (block), `## T {#id}` (heading, section), `[]{#id}` anchor (other) |
 | `title`                           | `# `                      |
