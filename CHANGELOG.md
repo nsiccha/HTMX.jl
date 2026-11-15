@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.2.1
+
+- In Markdown, a `<p>` inside content that must stay one paragraph (a link or
+  other inline element, a heading, a figure caption, the span
+  `HTMX.markdown_div` writes in a list item, link, heading or table cell, an
+  element's own `lang` span) is set off by a line break, written as a `<br>`
+  is there: a hard break `\` + newline, a space in a heading, `<br>` in a
+  table cell. It wrote a blank line, which ended the span, link, heading or
+  caption around it: `- [*lbl*\n\nSECRET]{.x}` is now
+  `- [*lbl*\` + newline + `SECRET]{.x}`.
+
 ## 1.2.0
 
 - Add `HTMX.markdown_div` and `HTMX.markdown_block_context` (public, not

@@ -945,6 +945,52 @@ caption, which Quarto reads as the figure div's last paragraph.
 end
 
 """
+Inside content that must stay one paragraph (a link or other inline element, a
+heading, a figure caption, a span), a blank line would end it, so a paragraph
+there is set off by a line break, written as a `<br>` is: a hard break, a space
+in a heading, `<br>` in a table cell, only between content. A paragraph in a
+list item itself is unchanged (todo `0lhoqso`).
+"""
+@testitem "markdown - a paragraph inside one-paragraph content is a line break" setup=[HTMXTestHelpers] tags=[:unit, :markdown] begin
+    @test to_md(h.a(h.p("SECRET"); href="/x")) == "[SECRET](/x)"
+    @test to_md(h.a(h.p("A"), h.p("B"); href="/x")) == "[A\\\nB](/x)"
+    @test to_md(h.div(h.a(h.p("A"); href="/x"), "after")) == "[A](/x)\\\nafter"
+    @test to_md(h.p(h.a("lead ", h.div(h.p("A")); href="/x"))) == "[lead \\\nA](/x)\n\n"
+    @test to_md(h.em(h.p("A"))) == "*A*"
+    @test to_md(h.strong("a", h.p("b"), "c")) == "**a\\\nb\\\nc**"
+    @test to_md(h.h2("T ", h.p("A"))) == "## T  A\n"
+    @test to_md(h.figure(h.img(src="/a.png", alt="A"), h.figcaption("cap ", h.p("long")))) ==
+        "\n\n::: {}\n\n![](/a.png){alt=\"A\"}\n\ncap \\\nlong\n:::\n\n"
+    @test to_md(h.figcaption(h.p("a"), h.p("b"))) == "a\\\nb"
+    @test to_md(h.ul(h.li(h.span(h.p("A"), h.p("B"); lang="de")))) == "- [A\\\nB]{lang=\"de\"}\n"
+    @test to_md(h.table(h.tr(h.th("A")), h.tr(h.td(h.a(h.p("A"), h.p("B"); href="/x"))))) ==
+        "| A |\n| --- |\n| [A<br>B](/x) |\n\n"
+    # a `<br>` before the paragraph is the same line break, not a second one
+    @test to_md(h.a("a", h.br(), h.p("b"); href="/x")) == "[a\\\nb](/x)"
+    # a paragraph directly in a list item or a container is unchanged
+    @test to_md(h.ul(h.li("lead ", h.p("SECRET")))) == "- lead \n\nSECRET\n\n\n"
+    @test to_md(h.div("t", h.p("x"), "u")) == "t\n\nx\n\nu"
+
+    # a `markdown_div` span holds its content in one paragraph (snag `markdown-div-spa-e5788bf2`)
+    struct Labelled
+        content
+    end
+    Base.show(io::IO, m::MIME"text/markdown", x::Labelled) =
+        HTMX.markdown_div(io; class="x") do io
+            print(io, "*lbl*")
+            show(io, m, h.div(x.content))
+        end
+    secret = Labelled(h.p("SECRET"))
+    @test to_md(h.ul(h.li(secret))) == "- [*lbl*\\\nSECRET]{.x}\n"
+    @test to_md(h.a(secret; href="/x")) == "[[*lbl*\\\nSECRET]{.x}](/x)"
+    @test to_md(h.h2(secret)) == "## [*lbl* SECRET]{.x}\n"
+    @test to_md(h.table(h.thead(h.tr(h.th("A"))), h.tbody(h.tr(h.td(secret))))) ==
+        "| A |\n| --- |\n| [*lbl*<br>SECRET]{.x} |\n\n"
+    @test to_md(h.ul(h.li(Labelled([h.p("A"), h.p("B")])))) == "- [*lbl*\\\nA\\\nB]{.x}\n"
+    @test to_md(h.div("t", secret)) == "t\n\n::: {.x}\n\n*lbl*\n\nSECRET\n\n:::\n\n"
+end
+
+"""
 An `<a>` that names no target is no link in Markdown: one without `href`,
 such as an htmx-only `h.a("x"; hx_get=…)`, which HTML has represent its
 contents, and one whose `href` is empty or a bare `#`, the usual placeholder
