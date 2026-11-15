@@ -259,6 +259,34 @@ HTMX.markdown_block(::MyCard) = true   # delimited like a div
 
 That `show` runs while the document is written, and a `Node` it prints renders inside the call, in the place it was printed: whatever the `show` holds while printing (a counter, a scoped value such as a heading level) applies to that node's own children. It normally runs once per occurrence. It runs a second time when its output holds the only in-page link to an element's id (the document is then written again, with that id), and once more inside a `header`, whose layout is probed first, so it should have no side effects beyond its output.
 
+To lay its content out as a block of its own, such a `show` writes a Pandoc div with `HTMX.markdown_div` (public, not exported). Its content is what the function passed first writes:
+
+```julia
+struct Note
+    text::String
+end
+function Base.show(io::IO, m::MIME"text/markdown", x::Note)
+    HTMX.markdown_div(io; class="note") do io
+        show(io, m, h.p(x.text))
+    end
+end
+
+repr("text/markdown", h.div("before", Note("text"), "after"))
+```
+```text
+before
+
+::: {.note}
+
+text
+
+:::
+
+after
+```
+
+The div starts a paragraph of its own and closes `:::` on a line of its own, wherever the value sits: at top level, among a node's children, inside an `article` or a `figure`. Its attribute block holds an `id`, the space-separated `class` names and any other keyword as `key="value"` (`custom_style="Note"` writes `custom-style="Note"`; `nothing` and `false` leave it out); `lang` also sets the content's language. Where a fence would break the line (inside a link, emphasis or heading, a table cell or a list item) it is a span `[text]{.note}` instead, as HTMX writes an element's own `id` and `lang` there, and inside a `<pre>` body the content is written verbatim. `HTMX.markdown_block_context(io)` tells whether a block can start where the `show` writes, for a `show` that writes something else in a span. Neither needs HTMX's Markdown stream type: at top level `markdown_div` starts that stream itself, and a stream wrapped in an `IOContext` is used through the wrapper.
+
 The output targets Pandoc and Quarto, so their documents keep what accessible (tagged) PDF output needs:
 
 - An image's alt text is a Pandoc attribute, `![](src){alt="…"}`. A described image alone in its paragraph (`![alt](src)`) would be a Pandoc implicit figure, which Quarto captions with the description while dropping the image's alt text. GFM and Julia `Markdown` show the attribute as text.
