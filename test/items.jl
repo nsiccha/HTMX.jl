@@ -996,11 +996,14 @@ or a vector's elements; inside a link it stays inline.
 end
 
 """
-Discovering link targets and header layout evaluates foreign renderers once
-per occurrence. Captured nodes still render in their final Markdown context,
-and IO properties that change between discovery and emission are respected.
+A non-Node value's Markdown `show` runs while the document is written, once per
+occurrence. It runs twice when its output holds the only link to an element id
+(the document then renders again with that link), and once more under a
+`<header>`, whose layout is probed; nested headers are probed once each. Nodes
+it prints render in their final Markdown context, and IO properties are read
+where it is written.
 """
-@testitem "markdown - foreign rendering is reused within one render" setup=[HTMXTestHelpers] tags=[:unit, :markdown] begin
+@testitem "markdown - foreign rendering runs once per occurrence" setup=[HTMXTestHelpers] tags=[:unit, :markdown] begin
     struct Counted
         calls::Base.RefValue{Int}
         content
@@ -1013,18 +1016,23 @@ and IO properties that change between discovery and emission are respected.
     wrapped = Counted(calls, h.a("go"; href="#t"))
     node = h.div(h.p(id="t")("target"), wrapped)
     @test to_md(node) == "::: {#t}\n\ntarget\n\n:::\n\n[go](#t)"
-    @test calls[] == 1
+    @test calls[] == 2  # the only link to `t` is its own: a second render writes the id
     @test node.children[2] === wrapped
-    to_md(node)
-    @test calls[] == 2  # capture is local to one render
+    calls[] = 0
+    @test to_md(h.div(h.p(id="t")("target"), h.a("back"; href="#t"), wrapped)) ==
+        "::: {#t}\n\ntarget\n\n:::\n\n[back](#t)[go](#t)"
+    @test calls[] == 1  # the tree names `t` itself
     calls[] = 0
     @test to_md(h.span(wrapped, wrapped)) == "[go](#t)[go](#t)"
-    @test calls[] == 2  # occurrences are independent
+    @test calls[] == 2  # occurrences are independent; no element `t`, no second render
 
     calls[] = 0
     deep = foldl((node, _) -> h.header(node), 1:32; init=Counted(calls, h.span("title")))
     @test to_md(deep) == "### title\n"
-    @test calls[] == 1
+    @test calls[] == 2  # the innermost header's probe and its render
+    calls[] = 0
+    @test to_md(h.header(h.header(h.p("x"), Counted(calls, "c")))) == "x\n\nc\n"
+    @test calls[] == 1  # the probe stops at the paragraph
     calls[] = 0
     @test to_md(h.h2(Counted(calls, h.span("a", h.br(), "b")))) == "## a b\n"
     @test calls[] == 1
@@ -1055,6 +1063,102 @@ and IO properties that change between discovery and emission are respected.
     struct Broken end
     Base.show(io::IO, ::MIME"text/markdown", ::Broken) = error("broken renderer")
     @test_throws ErrorException to_md(h.header(Broken()))
+
+    # A `show` that catches exceptions cannot hide a block from the header probe
+    struct Catching
+        content
+    end
+    Base.show(io::IO, m::MIME"text/markdown", x::Catching) =
+        try show(io, m, x.content) catch; print(io, "error") end
+    @test to_md(h.header(Catching(h.p("block")))) == "block\n\n"
+end
+
+"""
+A non-Node value's Markdown `show` renders the nodes it prints inside its own
+call, wherever the value sits, so state it holds while printing applies to
+them: here a depth counter, in HTMXObjects scoped values such as a heading
+level, an audience or a private mark. A `show` that wraps itself in a node when
+it is not handed HTMX's stream, or that writes block boundaries itself,
+renders once and does not recurse (snag `markdown-deferre-172dda7c`).
+"""
+@testitem "markdown - foreign show renders its nodes inside its own call" setup=[HTMXTestHelpers] tags=[:unit, :markdown] begin
+    struct Level
+        depth::Base.RefValue{Int}
+        child
+    end
+    function Base.show(io::IO, m::MIME"text/markdown", x::Level)
+        x.depth[] += 1
+        try
+            show(io, m, h.div(x.child))
+        finally
+            x.depth[] -= 1
+        end
+    end
+    struct Depth
+        depth::Base.RefValue{Int}
+    end
+    Base.show(io::IO, ::MIME"text/markdown", x::Depth) = print(io, "depth=", x.depth[])
+    d = Ref(0)
+    level = Level(d, Depth(d))
+    @test to_md(level) == "depth=1"
+    @test to_md(h.div(level)) == "depth=1"
+    @test to_md(h.header(level)) == "### depth=1\n"
+    @test to_md(h.ul(h.li(level))) == "- depth=1\n"
+    @test to_md(h.table(h.tr(h.th("x")), h.tr(h.td(level)))) == "| x |\n| --- |\n| depth=1 |\n\n"
+    @test to_md(h.div(Level(d, Level(d, Depth(d))))) == "depth=2"
+    @test d[] == 0
+
+    struct SelfWrap
+        content
+    end
+    Base.show(io::IO, m::MIME"text/markdown", x::SelfWrap) = io isa HTMX._MDStream ?
+        (print(io, "["); show(io, m, x.content); print(io, "]")) : show(io, m, h.div(x))
+    @test to_md(SelfWrap("a")) == "[a]"
+    @test to_md(h.div(SelfWrap("a"))) == "[a]"
+    @test to_md(h.p("x ", SelfWrap(h.em("a")))) == "x [*a*]\n\n"
+
+    struct Fenced
+        content
+    end
+    function Base.show(io::IO, m::MIME"text/markdown", x::Fenced)
+        io isa HTMX._MDStream || return show(io, m, h.div(x))
+        HTMX._md_block_start(io)
+        HTMX._md_blank_line(io)
+        print(io, "::: {.mark}\n\n")
+        show(io, m, h.div(x.content))
+        HTMX._md_end_line(io)
+        print(io, ":::\n\n")
+    end
+    @test to_md(Fenced(h.p("inside"))) == "::: {.mark}\n\ninside\n\n:::\n\n"
+    @test to_md(h.div("text", Fenced("inside"), "after")) ==
+        "text\n\n::: {.mark}\n\ninside\n\n:::\n\nafter"
+end
+
+"""
+A non-Node value that prints a node into an `IOContext` around HTMX's stream
+starts a nested render. Its output reaches the stream write by write, as a
+render of plain nodes does, so block boundaries around it are the same whether
+or not the nested tree holds other values.
+"""
+@testitem "markdown - nested render in an IOContext writes as it streams" setup=[HTMXTestHelpers] tags=[:unit, :markdown] begin
+    struct InContext
+        content
+    end
+    Base.show(io::IO, m::MIME"text/markdown", x::InContext) = show(IOContext(io, :k => 1), m, x.content)
+    struct Text
+        s::String
+    end
+    Base.show(io::IO, ::MIME"text/markdown", x::Text) = print(io, x.s)
+    outers = (c -> h.div(h.div("a"), c, "b"), c -> h.div(h.ul(h.li("i")), c, "b"),
+              c -> h.p("x", h.br(), c, "y"), c -> h.ul(h.li("a"), c, h.li("b")))
+    inners = ((h.section(h.p("s"), h.span(" t")), h.section(h.p("s"), Text(" t"))),
+              (h.div(" ", h.p("s")), h.div(Text(" "), h.p("s"))),
+              (h.span("\n", "z"), h.span(Text("\n"), "z")))
+    for outer in outers, (plain, other) in inners
+        @test to_md(outer(InContext(other))) == to_md(outer(InContext(plain)))
+    end
+    @test to_md(h.div(h.div("a"), InContext(h.section(h.p("s"), Text(" t"))), "b")) ==
+        "a\n\n---\n\ns\n\n t\nb"
 end
 
 """

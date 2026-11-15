@@ -6,6 +6,12 @@
   dispatch for foreign values and nested arrays.
 - Avoid rendering empty Markdown table anchor prefixes and stream HXML class
   tokens without intermediate vectors.
+- Render a non-Node value's Markdown `show` while the document is written
+  again, so the nodes it prints render inside that call: state it holds while
+  printing applies to them, and a `show` that wraps itself in a node when not
+  handed HTMX's stream no longer overflows the stack. It runs once per
+  occurrence; a second render happens only when its output holds the only link
+  to an element id. Header layout probes no longer use an exception.
 
 ## 1.1.1
 
