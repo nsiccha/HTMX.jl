@@ -502,9 +502,11 @@ The attribute block holds, in this order:
 
 Where a fence would break the line (inside inline content such as a link,
 emphasis or a heading, inside a table cell, or inside a list item) the div is
-written as a span `[…]{#id .class key="value"}` holding the content on its
-line, as HTMX writes an element's own `id` and `lang` there; an empty span is
-left out. Inside a `<pre>` body `f(io)` writes verbatim, with neither.
+written as a span `[…]{#id .class key="value"}` holding the content in one
+paragraph, as HTMX writes an element's own `id` and `lang` there; an empty span
+is left out. A paragraph in it is set off by a line break, as in any content
+that must stay one paragraph: a hard break `\\` + newline, a space in a
+heading, `<br>` in a table cell. Inside a `<pre>` body `f(io)` writes verbatim, with neither.
 [`HTMX.markdown_block_context`](@ref) tells which of these applies, for a
 `show` that writes other content in a span.
 
@@ -728,8 +730,20 @@ for t in (:script, :style, :meta, :link, :button)
 end
 
 # Block leaves
-_md(io, m, node::Node, ::Val{:p}) =
-    (_md_block_start(io); _md_recurse(io, m, node); println(io); println(io))
+# Inside content that must stay one paragraph (an inline element, a heading, a
+# figure caption, a span), a blank line would end it, so a paragraph is set off
+# by a line break instead, written as a `<br>` is there: a hard break, a space
+# in a heading, `<br>` in a table cell. Like a `<br>`, it is written only
+# between content.
+function _md(io, m, node::Node, ::Val{:p})
+    io.inline > 0 || return (_md_block_start(io); _md_recurse(io, m, node); println(io); println(io))
+    _md_count_block(io)
+    _md_inline_break!(io)
+    _md_recurse(io, m, node)
+    _md_inline_break!(io)
+end
+# A line break waiting after content that ends mid-line, unless one already waits.
+_md_inline_break!(s::_MDStream) = (s.newlines == 0 && !s.open && (s.breaks = max(s.breaks, 1)); nothing)
 # A list item's own id and language are an anchor and a span after its marker,
 # so the item stays in its list.
 function _md(io, m, node::Node, ::Val{:li}; id=nothing, lang=nothing)
