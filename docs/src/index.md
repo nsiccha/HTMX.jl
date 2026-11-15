@@ -257,6 +257,8 @@ A child that is not a `Node` is written with its own `show(io, MIME"text/markdow
 HTMX.markdown_block(::MyCard) = true   # delimited like a div
 ```
 
+That `show` runs while the document is written, and a `Node` it prints renders inside the call, in the place it was printed: whatever the `show` holds while printing (a counter, a scoped value such as a heading level) applies to that node's own children. It normally runs once per occurrence. It runs a second time when its output holds the only in-page link to an element's id (the document is then written again, with that id), and once more inside a `header`, whose layout is probed first, so it should have no side effects beyond its output.
+
 The output targets Pandoc and Quarto, so their documents keep what accessible (tagged) PDF output needs:
 
 - An image's alt text is a Pandoc attribute, `![](src){alt="…"}`. A described image alone in its paragraph (`![alt](src)`) would be a Pandoc implicit figure, which Quarto captions with the description while dropping the image's alt text. GFM and Julia `Markdown` show the attribute as text.
