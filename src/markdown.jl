@@ -691,11 +691,43 @@ end
 
 # Semantic blocks: emit a leading `---` divider so an agent reader can see
 # where each block starts. Only leading (not trailing), so adjacent blocks
-# produce a single divider between them rather than doubled.
+# produce a single divider between them rather than doubled. With seams
+# switched off (`with_markdown_seams`) they are written as a `div` is.
+const _MD_SEAMS = ScopedValue(true)
+
+"""
+    HTMX.markdown_seams() -> Bool
+
+Whether Markdown written here puts a `---` seam before each `<article>` and
+`<section>`: `true` (the default) unless [`HTMX.with_markdown_seams`](@ref)
+switched it off around the current call.
+"""
+markdown_seams() = _MD_SEAMS[]
+
+"""
+    HTMX.with_markdown_seams(f, on::Bool)
+
+Call `f()` with the `---` seam that Markdown writes before each `<article>` and
+`<section>` switched on or off, and return its result. With `on = false` an
+`<article>` or `<section>` is written as a `<div>` is, a paragraph boundary
+with no line of its own, so a document turned into a PDF (Pandoc reads `---`
+as a horizontal rule) shows no rule there. Its linked `id` still goes on the
+heading that opens it (`## Title {#id}`), else on a fenced div, and a `lang`
+of its own still becomes a fenced div. An `<hr>` still writes `---`.
+
+The setting is a scoped value: every Markdown render inside `f`, a fresh
+`repr("text/markdown", x)` in a value's own `show` included, and every task
+`f` starts, sees it until `f` returns. A nested `with_markdown_seams(g, true)`
+switches the seam back on inside `g`.
+"""
+with_markdown_seams(f, on::Bool) = with(f, _MD_SEAMS => on)
+
 for t in (:article, :section)
     @eval _md(io, m, node::Node, ::Val{$(QuoteNode(t))}) =
-        (_md_block_start(io, "\n"); println(io); println(io, "---"); println(io); _md_recurse(io, m, node); println(io))
+        markdown_seams() ? _md_seam(io, m, node) : _md_container(io, m, node)
 end
+_md_seam(io, m, node) =
+    (_md_block_start(io, "\n"); println(io); println(io, "---"); println(io); _md_recurse(io, m, node); println(io))
 
 # <header> is the label/title of its surrounding block — an inline-only header
 # renders as a level-3 heading so the structure is legible to an agent reader.

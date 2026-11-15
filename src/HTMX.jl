@@ -17,15 +17,20 @@ For a value's own `show(io, MIME"text/markdown"(), x)`:
 - [`HTMX.markdown_block`](@ref) — declare that a type is a block in Markdown
 - [`HTMX.markdown_div`](@ref) — write a Pandoc div (`::: {.class}`) around content
 - [`HTMX.markdown_block_context`](@ref) — whether a block can start there
+
+For Markdown output:
+- [`HTMX.with_markdown_seams`](@ref) — switch the `---` before `<article>`/`<section>` on or off
+- [`HTMX.markdown_seams`](@ref) — whether that seam is on
 """
 module HTMX
 
 import Markdown
 using OrderedCollections: OrderedDict
+using ScopedValues: ScopedValue, with
 export auto, h, Node, Raw, @__str, md_to_node
 # `public` is Julia 1.11 syntax; on 1.10 these are documented as public.
 @static if VERSION >= v"1.11.0-DEV.469"
-    eval(Meta.parse("public markdown_block, markdown_div, markdown_block_context"))
+    eval(Meta.parse("public markdown_block, markdown_div, markdown_block_context, markdown_seams, with_markdown_seams"))
 end
 
 
