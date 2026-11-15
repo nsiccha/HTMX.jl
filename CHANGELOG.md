@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.3.1
+
+- In Markdown, the blank line that follows a list item or block container is
+  written in front of the first write that holds content, and the line
+  endings that write opens with count toward it. A value's `show` that opened
+  a block with its own line endings and printed the rest in further writes
+  got that blank line inside its second write:
+  `print(io, "\n\n::: {.note data-name=\""); print(io, "cs-trend"); …` right
+  after a `div` wrote `data-name="\n\ncs-trend"`. It now gets what one write
+  of the same bytes gets. Text that opens with a single line ending right
+  after a container now starts a new paragraph as well:
+  `h.div(h.div("one"), "\ntwo")` renders `"one\n\ntwo"`, where it rendered
+  `"one\ntwo"`, one paragraph.
+
 ## 1.3.0
 
 - Add `HTMX.with_markdown_seams(f, on::Bool)` and `HTMX.markdown_seams()`
