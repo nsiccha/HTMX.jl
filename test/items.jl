@@ -1135,6 +1135,104 @@ renders once and does not recurse (snag `markdown-deferre-172dda7c`).
 end
 
 """
+A non-Node value's Markdown `show` writes a Pandoc div through the public
+`HTMX.markdown_div`, without HTMX's internal stream type: a fenced div of its
+own paragraph at top level and among a node's children, a span where a fence
+would break the line, verbatim in a `<pre>` body. `HTMX.markdown_block_context`
+tells which applies.
+"""
+@testitem "markdown - a foreign show writes a Pandoc div through markdown_div" setup=[HTMXTestHelpers] tags=[:unit, :markdown] begin
+    struct Note
+        content
+        kw
+    end
+    Note(content; kw...) = Note(content, kw)
+    const CALLS = Ref(0)
+    Base.show(io::IO, m::MIME"text/markdown", x::Note) =
+        HTMX.markdown_div(io; x.kw...) do io
+            CALLS[] += 1
+            show(io, m, x.content)
+        end
+    calls(x) = (CALLS[] = 0; out = to_md(x); (out, CALLS[]))
+
+    # A fenced div that starts a paragraph of its own, at top level and among
+    # a node's children
+    @test to_md(Note(h.p("inside"); class="mark")) == "::: {.mark}\n\ninside\n\n:::\n\n"
+    @test to_md(Note("inside"; class="mark")) == "::: {.mark}\n\ninside\n:::\n\n"
+    @test to_md(h.div("before", Note("text"; class="note"), "after")) ==
+        "before\n\n::: {.note}\n\ntext\n:::\n\nafter"
+    @test to_md(h.article(h.h2("T"), Note(h.p("x"); class="note"), h.p("after"))) ==
+        "\n---\n\n## T\n\n::: {.note}\n\nx\n\n:::\n\nafter\n\n\n"
+    @test to_md(h.div(h.ul(h.li("a")), Note("x"; class="n"))) == "- a\n\n::: {.n}\n\nx\n:::\n\n"
+    @test calls(Note(Note(h.p("x"); class="inner"); class="outer")) ==
+        ("::: {.outer}\n\n::: {.inner}\n\nx\n\n:::\n\n:::\n\n", 2)
+    # A header holding one has blocks, and the probe does not call `f`
+    @test calls(h.header(Note("x"; class="n"))) == ("::: {.n}\n\nx\n:::\n\n", 1)
+
+    # The attribute block: id, classes, then the other keywords in order
+    @test to_md(Note("x"; id="n1", class="a b-c", custom_style="Note", data_x=nothing,
+                     hidden=false, open=true)) ==
+        "::: {#n1 .a .b-c custom-style=\"Note\" open=\"true\"}\n\nx\n:::\n\n"
+    @test to_md(Note("x"; id="1 x", class="a 1b")) == "::: {id=\"1 x\" class=\"a 1b\"}\n\nx\n:::\n\n"
+    @test to_md(Note("x")) == "::: {}\n\nx\n:::\n\n"
+    # `lang` is the language of the content
+    @test to_md(h.div(Note([h.p(h.span("w"; lang="en")), h.p(h.span("v"; lang="de"))]; lang="en"))) ==
+        "::: {lang=\"en\"}\n\nw\n\n[v]{lang=\"de\"}\n\n:::\n\n"
+
+    # Where a fence would break the line, a span on that line
+    @test to_md(h.table(h.tr(h.th("h")), h.tr(h.td(Note(h.p("x"); class="note"))))) ==
+        "| h |\n| --- |\n| [x]{.note} |\n\n"
+    @test to_md(h.ul(h.li(Note(h.div("x"); class="note")), h.li("y"))) == "- [x]{.note}\n- y\n"
+    @test to_md(h.p(h.a(Note("x"; class="n"); href="/x"))) == "[[x]{.n}](/x)\n\n"
+    @test to_md(h.h2("T ", Note("x"; class="n"))) == "## T [x]{.n}\n"
+    # A `<pre>` body is verbatim
+    @test to_md(h.pre(h.code(Note("x = 1"; class="n")))) == "```\nx = 1\n```\n"
+
+    # In-page links: an id inside the div that a link outside points at, and
+    # a link inside it, the only one to its id, which renders the tree again
+    @test calls(h.div(h.a("go"; href="#t"), Note(h.p("t"; id="t"); class="n"))) ==
+        ("[go](#t)\n\n::: {.n}\n\n::: {#t}\n\nt\n\n:::\n\n:::\n\n", 1)
+    @test calls(h.div(Note(h.a("go"; href="#t"); class="n"), h.p("t"; id="t"))) ==
+        ("::: {.n}\n\n[go](#t)\n:::\n\n::: {#t}\n\nt\n\n:::\n\n", 2)
+    @test calls(Note([h.a("go"; href="#t"), h.p("t"; id="t")]; class="n")) ==
+        ("::: {.n}\n\n[go](#t)\n\n::: {#t}\n\nt\n\n:::\n\n:::\n\n", 2)
+
+    # Through an `IOContext` around HTMX's stream: the fence is placed in the
+    # stream, and `f` keeps the wrapper's properties
+    struct Wrap
+        x
+    end
+    Base.show(io::IO, m::MIME"text/markdown", w::Wrap) = show(IOContext(io, :k => 1), m, w.x)
+    struct Prop end
+    Base.show(io::IO, ::MIME"text/markdown", ::Prop) = print(io, "k=", get(io, :k, 0))
+    @test to_md(h.div("text", Wrap(Note("in"; class="n")), "after")) ==
+        "text\n\n::: {.n}\n\nin\n:::\n\nafter"
+    @test to_md(Wrap(Note(Prop(); class="n"))) == "::: {.n}\n\nk=1\n:::\n\n"
+    @test to_md(h.ul(h.li(Wrap(Note(Prop(); class="n"))))) == "- [k=1]{.n}\n"
+
+    # Where a block can start
+    struct Where end
+    Base.show(io::IO, ::MIME"text/markdown", ::Where) =
+        print(io, HTMX.markdown_block_context(io) ? "block" : "line")
+    @test to_md(Where()) == "block"
+    @test to_md(h.div(Where())) == "block"
+    @test to_md(h.figure(Where())) == "\n\n::: {}\n\nblock\n:::\n\n"
+    @test to_md(h.blockquote(Where())) == "> block\n\n"
+    @test to_md(h.ul(h.li(Where()))) == "- line\n"
+    @test to_md(h.table(h.tr(h.td(Where())))) == "| line |\n| --- |\n\n"
+    @test to_md(h.h2(Where())) == "## line\n"
+    @test to_md(h.p(h.a(Where(); href="/"))) == "[line](/)\n\n"
+    @test to_md(h.pre(Where())) == "```\nline\n```\n"
+    @test to_md(Wrap(h.ul(h.li(Wrap(Where()))))) == "- line\n"
+
+    # Public names, not exported
+    @static if VERSION >= v"1.11.0-DEV.469"
+        @test all(n -> Base.ispublic(HTMX, n), (:markdown_block, :markdown_div, :markdown_block_context))
+    end
+    @test !any(n -> Base.isexported(HTMX, n), (:markdown_block, :markdown_div, :markdown_block_context))
+end
+
+"""
 A non-Node value that prints a node into an `IOContext` around HTMX's stream
 starts a nested render. Its output reaches the stream write by write, as a
 render of plain nodes does, so block boundaries around it are the same whether

@@ -76,6 +76,12 @@ _md_show(io::_MDStream, m, x) = _md_emit(io, m, x)
 _md_emit(s, m, n::Node) = _md_node(s, m, n)
 _md_emit(s, m, xs::AbstractArray) = foreach(x -> _md_child(s, m, x), xs)
 
+# The Markdown stream that writes to `io` go to, if any: a `show` may hand the
+# stream on wrapped in an `IOContext`.
+_md_stream(io) = nothing
+_md_stream(s::_MDStream) = s
+_md_stream(io::IOContext) = _md_stream(io.io)
+
 # The links a tree names itself: the `href`s of its `<a>` nodes and the `](#…)`
 # links in its strings. Returns whether the tree holds a value of another type.
 function _md_collect_links!(links, n::Node)
@@ -108,9 +114,7 @@ function _md_render_held(io, m, x, targets)
         String(take!(buffer)), nothing
     end
 end
-_md_writes_to_stream(io) = false
-_md_writes_to_stream(::_MDStream) = true
-_md_writes_to_stream(io::IOContext) = _md_writes_to_stream(io.io)
+_md_writes_to_stream(io) = !isnothing(_md_stream(io))
 struct _MDHeld <: IO
     buffer::IOBuffer
     ends::Vector{Int}  # the output's length after each write
@@ -338,7 +342,7 @@ _md_attrs(s, m, n, v, id, lang, ::Val{:inline}) =
 function _md_attrs(s, m, n, v, id, lang, ::Val{:block})
     isnothing(id) && isnothing(lang) && return _md(s, m, n, v)
     _md_span_context(s) && return _md_attrs(s, m, n, v, id, lang, Val(:inline))
-    _md_fenced_div(t -> _md(t, m, n, v), s, id, lang)
+    _md_fenced_div(t -> _md(t, m, n, v), s, _md_attr_block(id, :lang => lang), lang)
 end
 # A heading keeps its id on its line wherever it is a heading, which it is not
 # inside inline content, a table cell or a language span.
@@ -347,7 +351,7 @@ function _md_attrs(s, m, n, v, id, lang, ::Val{:heading})
         return _md_attrs(s, m, n, v, id, lang, Val(:inline))
     end
     heading(t) = _md(t, m, n, v; id)
-    isnothing(lang) ? heading(s) : _md_fenced_div(heading, s, nothing, lang)
+    isnothing(lang) ? heading(s) : _md_fenced_div(heading, s, _md_attr_block(nothing, :lang => lang), lang)
 end
 # A section's id goes on the heading that opens it, unless that heading
 # writes an id of its own; else the section is a block.
@@ -376,45 +380,60 @@ function _md_in_lang(f, s::_MDStream, lang)
     nothing
 end
 _md_in_lang(f, s::_MDStream, ::Nothing) = f(s)
-function _md_fenced_div(f, s::_MDStream, id, lang)
+# A fenced div with the attribute block `attrs`, whose content `f` writes in
+# the language `lang` (`nothing`: the enclosing one).
+function _md_fenced_div(f, s::_MDStream, attrs::AbstractString, lang)
     _md_block_start(s)
+    _md_found(s) && return
     _md_blank_line(s)
-    println(s, "::: ", _md_attr_block(id, :lang => lang))
+    println(s, "::: ", attrs)
     println(s)
     _md_in_lang(f, s, lang)
     _md_end_line(s)
     println(s, ":::")
     print(s, "\n")
 end
-# The span's content renders into its own buffer, so the leading and trailing
-# line breaks of a block inside it stay outside the brackets. The brackets
-# leave no trace in Typst, so an anchor on either side of them is adjacent to
-# one inside.
-_md_lang_span(f, s::_MDStream, ::Nothing) = f(s)
-function _md_lang_span(f, s::_MDStream, lang)
+# A bracketed span `[…]` with the attribute block `attrs`, written only when
+# its content is not empty. The content renders into its own buffer, so the
+# leading and trailing line breaks of a block inside it stay outside the
+# brackets. The brackets leave no trace in Typst, so an anchor on either side
+# of them is adjacent to one inside.
+function _md_span(f, s::_MDStream, attrs::AbstractString, lang)
     buf = IOBuffer()
     t = _MDStream(IOContext(buf, s.io); inline=s.inline + 1, line=s.line, code=s.code,
-                  item=s.item, lang, targets=s.targets, probe=s.probe)
+                  item=s.item, lang=something(lang, s.lang), targets=s.targets, probe=s.probe)
     t.anchor = s.anchor
     f(t)
     s.blocks += t.blocks
     text = strip(String(take!(buf)), '\n')
     if !isempty(text)
-        print(s, _md_lang_span_text(text, lang))
+        print(s, _md_span_text(text, attrs))
         s.anchor = t.anchor
     end
     s.breaks += t.breaks  # a break that ends the span is written after it
     nothing
 end
-_md_lang_span_text(text, lang) = string("[", text, "]", _md_attr_block(nothing, :lang => lang))
+_md_lang_span(f, s::_MDStream, ::Nothing) = f(s)
+_md_lang_span(f, s::_MDStream, lang) = _md_span(f, s, _md_attr_block(nothing, :lang => lang), lang)
+_md_span_text(text, attrs) = string("[", text, "]", attrs)
+_md_lang_span_text(text, lang) = _md_span_text(text, _md_attr_block(nothing, :lang => lang))
 
-# A Pandoc attribute block, `{#id lang="en"}`: the id, written `id="…"` when the
-# `#` shorthand cannot spell it (letters, digits and `_ . : -`), then each
-# `key => value` that is not `nothing`.
-function _md_attr_block(id, pairs::Pair...)
+# A Pandoc attribute block, `{#id .class lang="en"}`: the id, written `id="…"`
+# when the `#` shorthand cannot spell it (letters, digits and `_ . : -`); the
+# classes, written as one `class="…"` when a `.` cannot spell one of them (it
+# must also start with a letter); then each `key => value` that is not
+# `nothing`.
+const _MD_ID = r"^[\p{L}\p{N}_.:-]+$"
+const _MD_CLASS = r"^\p{L}[\p{L}\p{N}_.:-]*$"
+_md_attr_block(id, pairs::Pair...) = _md_attr_block(id, (), pairs...)
+function _md_attr_block(id, classes, pairs::Pair...)
     parts = String[]
-    isnothing(id) ||
-        push!(parts, occursin(r"^[\p{L}\p{N}_.:-]+$", id) ? "#" * id : "id=" * _md_attr_value(id))
+    isnothing(id) || push!(parts, occursin(_MD_ID, id) ? "#" * id : "id=" * _md_attr_value(id))
+    if all(c -> occursin(_MD_CLASS, c), classes)
+        foreach(c -> push!(parts, "." * c), classes)
+    else
+        push!(parts, "class=" * _md_attr_value(join(classes, " ")))
+    end
     for (k, v) in pairs
         isnothing(v) || push!(parts, string(k, "=", _md_attr_value(v)))
     end
@@ -445,6 +464,110 @@ HTMX.markdown_block(::MyCard) = true
 A `Node` is a block or not by its tag; this function is not consulted for it.
 """
 markdown_block(x) = false
+
+"""
+    HTMX.markdown_div(f, io; id=nothing, class=nothing, attributes...)
+
+Write a Pandoc div from a value's `show(io, MIME"text/markdown"(), x)`: a fenced
+div `::: {#id .class key="value"}` whose content `f(io)` writes. The div starts
+a paragraph of its own (inline text before it is closed as a paragraph), a
+blank line follows its opening fence, and its closing `:::` stands on a line
+of its own, followed by a blank line. A `Node` that `f` prints renders inside
+the div, in its context.
+
+```julia
+function Base.show(io::IO, m::MIME"text/markdown", x::Note)
+    HTMX.markdown_div(io; class="note") do io
+        show(io, m, h.p(x.text))
+    end
+end
+```
+
+`repr("text/markdown", h.div("before", Note("text"), "after"))` is then
+`"before\\n\\n::: {.note}\\n\\ntext\\n\\n:::\\n\\nafter"`.
+
+The attribute block holds, in this order:
+
+- `id`: `#id`, or `id="…"` when the `#` shorthand cannot spell it (letters,
+  digits and `_ . : -`);
+- `class`: space-separated class names, as in HTML, each written `.name`, or
+  all of them as one `class="…"` when a name does not start with a letter or
+  holds other characters;
+- every other keyword argument as `key="value"`, in the given order, with
+  underscores in its name becoming hyphens (`custom_style="Note"` writes
+  `custom-style="Note"`); `nothing` and `false` leave it out and `true` writes
+  `"true"`, as for a `Node` attribute. `lang` also makes the content's
+  language that one, so a node inside with the same `lang` declares no scope
+  of its own.
+
+Where a fence would break the line (inside inline content such as a link,
+emphasis or a heading, inside a table cell, or inside a list item) the div is
+written as a span `[…]{#id .class key="value"}` holding the content on its
+line, as HTMX writes an element's own `id` and `lang` there; an empty span is
+left out. Inside a `<pre>` body `f(io)` writes verbatim, with neither.
+[`HTMX.markdown_block_context`](@ref) tells which of these applies, for a
+`show` that writes other content in a span.
+
+`io` need not be HTMX's Markdown stream. At top level
+(`repr("text/markdown", x)`) `markdown_div` starts one, as rendering a `Node`
+does, and `f` receives it; HTMX's stream wrapped in an `IOContext` is used
+through the wrapper, and `f` receives the wrapper with its properties. The
+`show` therefore never needs to know HTMX's stream type. `f` runs once per
+`markdown_div` call. At top level it runs a second time when its own output
+holds the only in-page link to an element id it prints, as a value's `show`
+does among a node's children; there the `show` is called again instead.
+"""
+function markdown_div(f, io::IO; id=nothing, class=nothing, attributes...)
+    get(io, :md_verbatim, false) && return (f(io); nothing)
+    pairs = Pair{Symbol,String}[]
+    lang = nothing
+    for (k, v) in attributes
+        (v === nothing || v === false) && continue
+        key = _attr_symbol(k)
+        value = v === true ? "true" : string(v)
+        key === :lang && !isempty(value) && (lang = value)
+        push!(pairs, key => value)
+    end
+    classes = class === nothing || class === false ? String[] : split(string(class))
+    attrs = _md_attr_block(id === nothing || id === false ? nothing : string(id), classes, pairs...)
+    div = _MDDiv(f, attrs, lang)
+    s = _md_stream(io)
+    isnothing(s) ? _md_show(io, _md_mime, div) : _md_div(s, io, div)
+    nothing
+end
+
+"""
+    HTMX.markdown_block_context(io) -> Bool
+
+Whether a block can start where a value's `show(io, MIME"text/markdown"(), x)`
+writes, so that [`HTMX.markdown_div`](@ref) writes a fenced div there. It is
+`true` at top level and among the children of a block container (`div`,
+`article`, `figure`, `blockquote`, …). It is `false` inside inline content (a
+link, emphasis, a heading), a table cell or a list item, where a fence would
+break the line and `markdown_div` writes a span, and inside a `<pre>` body,
+where its content is written verbatim.
+"""
+function markdown_block_context(io::IO)
+    get(io, :md_verbatim, false) && return false
+    s = _md_stream(io)
+    isnothing(s) || !_md_span_context(s)
+end
+
+# A div that `markdown_div` writes: its content, attribute block and language.
+struct _MDDiv{F}
+    f::F
+    attrs::String
+    lang::Union{Nothing,String}
+end
+# At top level `markdown_div` renders like a value among a node's children.
+_md_emit(s::_MDStream, m, d::_MDDiv) = _md_div(s, s, d)
+# `io` is `s` or an `IOContext` around it; `f` receives that, or around a span's
+# own stream, a wrapper with the same properties.
+function _md_div(s::_MDStream, io, d::_MDDiv)
+    _md_span_context(s) ?
+        _md_span(t -> d.f(io === s ? t : IOContext(t, io)), s, d.attrs, d.lang) :
+        _md_fenced_div(_ -> d.f(io), s, d.attrs, d.lang)
+end
 
 # Recurse into children as if the node were transparent
 _md_recurse(io, m, node) = for c in children(node)

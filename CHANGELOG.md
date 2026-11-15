@@ -1,7 +1,14 @@
 # Changelog
 
-## Unreleased
+## 1.2.0
 
+- Add `HTMX.markdown_div` and `HTMX.markdown_block_context` (public, not
+  exported) for a non-Node value's Markdown `show`: write a Pandoc div
+  `::: {#id .class key="value"}` around content that starts a paragraph of its
+  own, or a span where a fence would break the line (a table cell, a list
+  item, inline content), and tell which applies, without HTMX's internal
+  Markdown stream. `markdown_block`, `markdown_div` and
+  `markdown_block_context` are declared `public` on Julia 1.11 and newer.
 - Reuse buffers when converting node arrays to HTML, retaining custom `auto`
   dispatch for foreign values and nested arrays.
 - Avoid rendering empty Markdown table anchor prefixes and stream HXML class
