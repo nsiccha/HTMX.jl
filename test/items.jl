@@ -928,6 +928,43 @@ blank line of its own, so a lone or nested container renders as before.
 end
 
 """
+The blank line after a list item or block container goes in front of the first
+write that holds content, and the line endings that write opens with count
+toward it. A value's `show` that opens a block with its own line endings and
+prints the rest in further writes therefore gets exactly the output of one
+write: nothing is written into its later writes, such as the inside of a quoted
+attribute (snag `markdown-stream-ecd8c979`, reporter BayesianRegressionReports).
+"""
+@testitem "markdown - the boundary after a container goes before the write that holds content" setup=[HTMXTestHelpers] tags=[:unit, :markdown] begin
+    struct Writes
+        parts::Vector{String}
+    end
+    Base.show(io::IO, ::MIME"text/markdown", x::Writes) = foreach(p -> print(io, p), x.parts)
+    note = "\n\n::: {.note data-name=\"cs-trend\"}\nbody\n:::\n\n"
+    pieces = Writes(["\n\n::: {.note data-name=\"", "cs-trend", "\"}\nbody\n:::\n\n"])
+    @test to_md(h.div(h.div(h.p("Prose.")), pieces)) == "Prose.\n\n" * note
+    # every split into two writes gives the output of one write, after a
+    # container, a list item, a paragraph and inline text
+    outers = (x -> h.div(h.div(h.p("Prose.")), x), x -> h.div(h.div("one"), x),
+              x -> h.div(h.ul(h.li("a")), x), x -> h.div(h.p("p"), x), x -> h.div("text", x))
+    for outer in outers
+        whole = to_md(outer(Writes([note])))
+        @test all(i -> to_md(outer(Writes([note[1:i], note[i+1:end]]))) == whole, 1:length(note)-1)
+    end
+    # line endings that open a write with content count toward the blank line
+    @test to_md(h.div(h.div("one"), "\ntwo")) == "one\n\ntwo"
+    @test to_md(h.div(h.div("one"), "\n\ntwo")) == "one\n\ntwo"
+    @test to_md(h.div(h.div("one"), "\n \ntwo")) == "one\n \ntwo"
+    @test to_md(h.div(h.ul(h.li("a")), "\ntail ", h.strong("b"))) == "- a\n\ntail **b**"
+    @test to_md(h.div(h.div("one"), "\ntwo ", h.em("three"))) == "one\n\ntwo *three*"
+    # a write of line endings and blanks only leaves the boundary waiting
+    @test to_md(h.div(h.div("one"), "\n  ", "two")) == "one\n  \n\ntwo"
+    @test to_md(h.div(h.div("one"), "\n", "two")) == "one\n\ntwo"
+    # the next list item still follows its item directly
+    @test to_md(h.ul(h.li("a"), h.li("b"))) == "- a\n- b\n"
+end
+
+"""
 Content that must stay one paragraph keeps its block containers transparent:
 the text of a link or other inline element, a heading line, and a figure
 caption, which Quarto reads as the figure div's last paragraph.

@@ -141,13 +141,33 @@ Base.get(s::_MDStream, key, default) = get(s.io, key, default)
 
 # Content written right after a list item would continue it lazily, and content
 # after a block container belongs to a new paragraph, so anything but the next
-# item starts after a blank line.
-function _md_before_write!(s::_MDStream, byte::UInt8, all_newlines::Bool)
-    if s.lazy && byte != UInt8('\n')
+# item starts after a blank line. It goes in front of the first write that holds
+# content, and the line endings that write opens with (`leading`) count toward
+# it: a value's `show` that opens a block with its own line endings and prints
+# the rest in further writes settles the boundary there, so nothing is written
+# into its later writes. `leading` is `nothing` for a write of line endings and
+# blanks only, which leaves the boundary waiting.
+function _md_before_write!(s::_MDStream, byte::UInt8, all_newlines::Bool, leading::Union{Nothing,Int})
+    if s.lazy && !isnothing(leading)
         s.lazy = false
-        s.newlines < 2 && (_md_count_block(s); write(s.io, "\n"^(2 - s.newlines)))
+        short = 2 - s.newlines - leading
+        short > 0 && (_md_count_block(s); write(s.io, "\n"^short))
     end
     s.breaks > 0 && _md_write_breaks!(s, byte, all_newlines)
+end
+# The line endings a write opens with, before its first byte of content (blanks
+# between them included), or `nothing` when it holds no content.
+function _md_opening_newlines(p::Ptr{UInt8}, n::UInt)
+    count = 0
+    for i in 1:n
+        b = unsafe_load(p, i)
+        if b == UInt8('\n')
+            count += 1
+        elseif !_md_blank(b)
+            return count
+        end
+    end
+    nothing
 end
 # A `<br>` is written with the content after it. Line endings alone end the
 # block, where HTML shows no break either, so the waiting breaks are dropped.
@@ -179,7 +199,7 @@ _md_blank(byte::UInt8) = byte == UInt8(' ') || byte == UInt8('\t')
 function Base.write(s::_MDStream, b::UInt8)
     _md_blank(b) && return write(s.io, b)
     newline = b == UInt8('\n')
-    _md_before_write!(s, b, newline)
+    _md_before_write!(s, b, newline, newline ? nothing : 0)
     n = write(s.io, b)
     _md_after_write!(s, Int(newline), newline)
     n
@@ -190,7 +210,10 @@ function Base.unsafe_write(s::_MDStream, p::Ptr{UInt8}, n::UInt)
     while trailing < n && unsafe_load(p, n - trailing) == UInt8('\n')
         trailing += 1
     end
-    _md_before_write!(s, unsafe_load(p), trailing == n)
+    first = unsafe_load(p)
+    # only a pending boundary needs the opening line endings counted
+    leading = s.lazy && first == UInt8('\n') ? _md_opening_newlines(p, n) : 0
+    _md_before_write!(s, first, trailing == n, leading)
     written = unsafe_write(s.io, p, n)
     _md_after_write!(s, trailing, trailing == n)
     written

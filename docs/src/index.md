@@ -265,6 +265,8 @@ A child that is not a `Node` is written with its own `show(io, MIME"text/markdow
 HTMX.markdown_block(::MyCard) = true   # delimited like a div
 ```
 
+The blank line that follows a list item or block container goes in front of the first content that `show` writes, and line endings it opens with count toward that blank line, so splitting its output into several writes does not move the blank line into a later one: `print(io, "\n\n::: {.note data-name=\""); print(io, "x"); print(io, "\"}\nbody\n:::\n\n")` after a `div` keeps `data-name="x"` intact.
+
 That `show` runs while the document is written, and a `Node` it prints renders inside the call, in the place it was printed: whatever the `show` holds while printing (a counter, a scoped value such as a heading level) applies to that node's own children. It normally runs once per occurrence. It runs a second time when its output holds the only in-page link to an element's id (the document is then written again, with that id), and once more inside a `header`, whose layout is probed first, so it should have no side effects beyond its output.
 
 To lay its content out as a block of its own, such a `show` writes a Pandoc div with `HTMX.markdown_div` (public, not exported). Its content is what the function passed first writes:
