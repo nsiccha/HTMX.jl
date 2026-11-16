@@ -343,6 +343,8 @@ Conversion table:
 
 Unknown tags fall through transparently — their text content is printed.
 
+Text of only spaces or tabs between elements is written mid-line, where it separates inline content (`h.p(h.strong("a"), " ", h.em("b"))` gives `**a** *b*`), and left out at the start of a line, where Markdown would read it as indentation: Pandoc opens no fenced div at ` ::: {.note}`, and four spaces start an indented code block. A `<pre>` body and a value's own `show` keep their blanks as written.
+
 ### Building HTML from Markdown
 
 `md_to_node(s)` is the inverse: a Markdown string (or a parsed `Markdown.MD` AST) becomes an `h.*` tree, perfect for embedding user-authored Markdown inside an HTMX page.

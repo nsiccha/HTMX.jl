@@ -50,11 +50,12 @@ mutable struct _MDStream{T<:IO} <: IO
     targets::_MDTargets  # ids that in-page links of the document point at
     anchor::Bool   # the output so far ends with an id anchor `[]{#…}`
     probe::Bool    # stop a layout probe as soon as a block is found
+    placed::Bool   # the line being written is known: the output starts one, or the stream has written
     labels::Union{Nothing,Vector{_MDLabel}}  # `<details>` labels waiting for content, outermost first
 end
-_MDStream(io::IO; inline=0, line=0, code=0, item=0, lang="", targets=_MDTargets(), probe=false) =
+_MDStream(io::IO; inline=0, line=0, code=0, item=0, lang="", targets=_MDTargets(), probe=false, placed=false) =
     _MDStream(io, 2, false, false, 0, inline, line, code, 0, item, 0, nothing, :none, lang, targets, false, probe,
-              nothing)
+              placed, nothing)
 # Labels are rare, so a stream holds a vector of them only once a `<details>` needs one.
 _md_label_count(s::_MDStream) = isnothing(s.labels) ? 0 : length(s.labels)
 
@@ -76,7 +77,8 @@ _md_label_count(s::_MDStream) = isnothing(s.labels) ? 0 : length(s.labels)
 function _md_show(io, m, x)
     get(io, :md_verbatim, false) && return _md_emit(_MDStream(io), m, x)
     links = Set{String}()
-    _md_collect_links!(links, x) || return _md_emit(_MDStream(io; targets=_MDTargets(links, nothing)), m, x)
+    _md_collect_links!(links, x) ||
+        return _md_emit(_MDStream(io; targets=_MDTargets(links, nothing), placed=!_md_writes_to_stream(io)), m, x)
     targets = _MDTargets(links, Set{String}())
     text, ends = _md_render_held(io, m, x, targets)
     found = _md_scan_targets!(Set{String}(), text)
@@ -124,7 +126,7 @@ function _md_render_held(io, m, x, targets)
         String(take!(held.buffer)), held.ends
     else
         buffer = IOBuffer()
-        _md_emit(_MDStream(IOContext(buffer, io); targets), m, x)
+        _md_emit(_MDStream(IOContext(buffer, io); targets, placed=true), m, x)
         String(take!(buffer)), nothing
     end
 end
@@ -207,11 +209,14 @@ function _md_after_write!(s::_MDStream, trailing::Int, all_newlines::Bool)
     s.newlines = min(2, all_newlines ? s.newlines + trailing : trailing)
     s.open = false
     s.anchor = false
+    s.placed = true
     all_newlines || (s.last_list = :none)
 end
 # Whitespace-only text between elements carries no content: it neither ends a
-# list item nor starts an inline run.
+# list item nor starts an inline run. As a node's text it is left out at the
+# start of a line (see `_md_indent_text`).
 _md_blank(byte::UInt8) = byte == UInt8(' ') || byte == UInt8('\t')
+_md_blank(c::AbstractChar) = c == ' ' || c == '\t'
 function Base.write(s::_MDStream, b::UInt8)
     _md_blank(b) && return write(s.io, b)
     newline = b == UInt8('\n')
@@ -619,8 +624,19 @@ end
 # One child among its siblings. Outside a Markdown stream (a `<pre>` body)
 # children are written verbatim.
 _md_child(io, m, c) = show(io, m, c)
-_md_child(io::_MDStream, m, c) = markdown_block(c) ?
-    (_md_container_start(io); show(io, m, c); _md_container_end(io)) : show(io, m, c)
+function _md_child(io::_MDStream, m, c)
+    c isa AbstractString && _md_indent_text(io, c) && return
+    markdown_block(c) ? (_md_container_start(io); show(io, m, c); _md_container_end(io)) : show(io, m, c)
+end
+# Whether text of only blanks would indent the next line. Mid-line it separates
+# the inline content around it and is written; at the start of a line Markdown
+# reads it as indentation (` ::: {.note}` opens no fenced div, four blanks start
+# an indented code block), so there it is left out. A stream that cannot see the
+# line its output starts on (a span's content, a render nested in another
+# stream's output) writes it until it has written something itself. A `<pre>`
+# body keeps it, and so does a value's own `show`, whose blanks are Markdown.
+_md_indent_text(s::_MDStream, c::AbstractString) =
+    s.placed && s.newlines > 0 && !isempty(c) && all(_md_blank, c) && !get(s, :md_verbatim, false)
 
 # Inline formatting — written straight to io (no intermediate strings). These
 # fire for inline elements everywhere EXCEPT inside <pre>: its handler recurses
@@ -939,7 +955,7 @@ _md(io, m, node::Node, ::Val{:title}) =
 # <blockquote> → "> "-prefixed lines
 function _md(io, m, node::Node, ::Val{:blockquote})
     buf = IOBuffer()
-    _md_recurse(_MDStream(buf; lang=io.lang, targets=io.targets), m, node)
+    _md_recurse(_MDStream(buf; lang=io.lang, targets=io.targets, placed=true), m, node)
     inner = rstrip(String(take!(buf)), '\n')
     isempty(inner) && return
     _md_block_start(io)

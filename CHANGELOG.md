@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.4.2
+
+- In Markdown, text of only spaces or tabs between elements no longer indents
+  the line after it. Before, such text at the start of a line was written as
+  it was, so the block after it was indented: Pandoc did not open a fenced div
+  written as ` ::: {.note}` and printed it as text (and its closing `:::`
+  closed the enclosing div instead), and four spaces turned the next paragraph
+  into an indented code block or the next list item into a nested list.
+  `h.div(h.p("Prose."), " ", h.h2("Heading"))` now gives
+  `"Prose.\n\n## Heading\n"`, and `h.ul(h.li("a"), " ", h.li("b"))` gives
+  `"- a\n- b\n"`. Mid-line such text is still written, as the separator
+  between inline content (`h.p(h.strong("a"), " ", h.em("b"))` gives
+  `"**a** *b*"`), and so is a leading blank in a span's content. A `<pre>` body
+  and a value's own `show` keep their blanks as written, since those are
+  Markdown (Julia's `Markdown` writes a list item's continuation indent as text
+  of its own).
+
 ## 1.4.1
 
 - In Markdown, a `<details>` keeps its `<summary>`. Before, the summary was
