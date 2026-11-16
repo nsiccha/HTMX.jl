@@ -823,8 +823,8 @@ end
 
 """
 Semantic HTML blocks preserve their agent-readable Markdown conventions:
-figures use Quarto fences, details omit the summary toggle, and blockquotes
-prefix every line.
+figures use Quarto fences, details write their summary as a bold label before
+the body, and blockquotes prefix every line.
 """
 @testitem "markdown - figure details and blockquote" setup=[HTMXTestHelpers] tags=[:unit, :markdown, :semantic] begin
     figure = h.figure(id="fig-main")(
@@ -835,8 +835,7 @@ prefix every line.
         "\n\n::: {#fig-main}\n\n![](/a.png){alt=\"A\"}\n\nCaption\n:::\n\n"
 
     details = h.details(h.summary("Toggle"), h.p("Visible ", h.strong("content")))
-    @test to_md(details) == "Visible **content**\n\n"
-    @test !occursin("Toggle", to_md(details))
+    @test to_md(details) == "**Toggle**\n\nVisible **content**\n\n"
 
     blockquote = h.blockquote(h.p("A ", h.strong("B")), h.p("C"))
     @test to_md(blockquote) == "> A **B**\n> \n> C\n\n"
@@ -988,7 +987,7 @@ blank line of its own, so a lone or nested container renders as before.
     @test to_md(h.div("x")) == "x"
     @test to_md(h.div("a", h.div(), "b")) == "a\n\nb"
     @test to_md(h.dl(h.dt("Term"), h.dd("Def"))) == "Term\n\nDef"
-    @test to_md(h.div("x", h.details(h.summary("s"), "content"), "y")) == "x\n\ncontent\n\ny"
+    @test to_md(h.div("x", h.details(h.summary("s"), "content"), "y")) == "x\n\n**s**\n\ncontent\n\ny"
     @test to_md([h.div("a"), h.div("b")]) == "a\n\nb"
     @test to_md(h.div(h.span("a"), h.span("b"))) == "ab"
     # a table cell folds the boundary into `<br>`
@@ -998,6 +997,64 @@ blank line of its own, so a lone or nested container renders as before.
     @test to_md(h.ul(h.li(h.div("a")), h.li(h.div("b")))) == "- a\n- b\n"
     @test to_md(h.header(h.div("Title"))) == "### Title\n"
     @test to_md(h.header(h.div("T"), h.div("sub"))) == "T\n\nsub\n"
+end
+
+"""
+A `<details>` writes its first `<summary>` as its label, a bold paragraph, and
+then its whole body: Markdown has no viewport to collapse into, and the label
+is text the reader reads (snag `markdown-details-293d48d8`, the KB usage
+panel's "Claude resets: …" summary over its table). A summary holding a
+heading writes it as it is. Where a blank line would break the line (a list
+item, a table cell, a link) a line break sets the label off. A disclosure with
+nothing to open (its body writes nothing) writes nothing, its label included.
+"""
+@testitem "markdown - a details' summary is its label" setup=[HTMXTestHelpers] tags=[:unit, :markdown, :semantic] begin
+    @test to_md(h.details(h.summary("S label"), h.p("B body"))) == "**S label**\n\nB body\n\n"
+    resets = h.details(; class="kb-claude-resets-group")(
+        h.summary("Claude resets: 1 held on 1 login"),
+        h.div(class="overflow-auto")(h.table(h.thead(h.tr(h.th("Login"), h.th("Left"))),
+                                             h.tbody(h.tr(h.td("b"), h.td("1 of 1"))))),
+        h.small("Times are KB-host local."))
+    @test to_md(resets) == "**Claude resets: 1 held on 1 login**\n\n| Login | Left |\n| --- | --- |\n" *
+                           "| b | 1 of 1 |\n\nTimes are KB-host local."
+    # the label keeps its inline markup, its linked id and its language
+    @test to_md(h.details(h.summary("See ", h.code("x")), h.p("y"))) == "**See `x`**\n\ny\n\n"
+    @test to_md(h.div(h.a("go"; href="#lbl"), h.details(h.summary("S"; id="lbl"), "B"))) ==
+        "[go](#lbl)\n\n[]{#lbl}**S**\n\nB"
+    @test to_md(h.div(; lang="de")(h.details(h.summary("Label"; lang="en"), "Inhalt"))) ==
+        "::: {lang=\"de\"}\n\n[**Label**]{lang=\"en\"}\n\nInhalt\n\n:::\n\n"
+    # nothing to open: no label (a form whose controls write nothing, a button, nothing)
+    @test to_md(h.div(h.p("a"), h.details(h.summary("Edit"), h.button("Save")), h.p("b"))) == "a\n\nb\n\n"
+    @test to_md(h.div(h.p("a"), h.details(h.summary("Edit"), h.form(h.button("Save"))), h.p("b"))) == "a\n\nb\n\n"
+    @test to_md(h.div(h.p("a"), h.details(h.summary("Empty")), h.p("b"))) == "a\n\nb\n\n"
+    # nested disclosures each write their label; an empty inner one writes none
+    @test to_md(h.details(h.summary("Outer"), h.details(h.summary("Inner"), h.p("deep")))) ==
+        "**Outer**\n\n**Inner**\n\ndeep\n\n"
+    @test to_md(h.details(h.summary("Outer"), h.details(h.summary("Inner"), h.button("x")), h.p("after"))) ==
+        "**Outer**\n\nafter\n\n"
+    # a summary holding a heading writes it; an empty summary, or none, writes no label
+    @test to_md(h.details(h.summary(h.h3("Title")), h.p("body"))) == "### Title\n\nbody\n\n"
+    @test to_md(h.details(h.summary(), h.p("body"))) == "body\n\n"
+    @test to_md(h.details(h.p("only body"))) == "only body\n\n"
+    # only the first summary is the label; a later one is body content, as in HTML
+    @test to_md(h.details(h.summary("First"), h.p("x"), h.summary("Second"))) == "**First**\n\nx\n\nSecond"
+    # the label goes in front of the body's first content, whatever block it opens
+    @test to_md(h.details(h.summary("S"), h.ul(h.li("a"), h.li("b")))) == "**S**\n\n- a\n- b\n"
+    @test to_md(h.details(h.summary("S"), h.pre(h.code("code")))) == "**S**\n\n```\ncode\n```\n"
+    @test to_md(h.details(h.summary("S"), h.br(), "x")) == "**S**\n\n\\\nx"
+    struct OpensWithNewlines end
+    Base.show(io::IO, ::MIME"text/markdown", ::OpensWithNewlines) =
+        (print(io, "\n\n::: {.note}\n"); print(io, "inside\n:::\n"))
+    @test to_md(h.details(h.summary("S"), OpensWithNewlines())) == "**S**\n\n::: {.note}\ninside\n:::\n"
+    # where a blank line would break the line, a line break sets the label off
+    @test to_md(h.ul(h.li(h.details(h.summary("S"), "B")), h.li("next"))) == "- **S**\\\nB\n- next\n"
+    @test to_md(h.table(h.tr(h.th("h")), h.tr(h.td(h.details(h.summary("S"), "B"))))) ==
+        "| h |\n| --- |\n| **S**<br>B |\n\n"
+    @test to_md(h.a(h.details(h.summary("S"), "B"); href="/x")) == "[**S**\\\nB](/x)"
+    # a header holding a disclosure holds two paragraphs, so it is no `### ` line
+    @test to_md(h.header(h.details(h.summary("S"), "B"))) == "**S**\n\nB\n"
+    # in a `<pre>` body the summary is plain text in its place
+    @test to_md(h.pre(h.code(h.details(h.summary("S"), "B")))) == "```\nSB\n```\n"
 end
 
 """
@@ -1155,7 +1212,8 @@ end
 A non-Node value's Markdown `show` runs while the document is written, once per
 occurrence. It runs twice when its output holds the only link to an element id
 (the document then renders again with that link), and once more under a
-`<header>`, whose layout is probed; nested headers are probed once each. Nodes
+`<header>` or in a `<details>`' label `<summary>`, whose layout is probed;
+nested headers are probed once each. Nodes
 it prints render in their final Markdown context, and IO properties are read
 where it is written.
 """
@@ -1194,6 +1252,17 @@ where it is written.
     @test calls[] == 1
     @test to_md(h.ul(h.li(Counted(Ref(0), h.div(lang="en")("word"))))) ==
         "- [word]{lang=\"en\"}\n"
+    # A disclosure's body renders once; its label's summary is probed, then
+    # written, and neither runs when the body writes nothing.
+    calls[] = 0
+    @test to_md(h.details(h.summary("S"), Counted(calls, h.p("b")))) == "**S**\n\nb\n\n"
+    @test calls[] == 1
+    calls[] = 0
+    @test to_md(h.details(h.summary(Counted(calls, "S")), h.p("b"))) == "**S**\n\nb\n\n"
+    @test calls[] == 2
+    calls[] = 0
+    @test to_md(h.details(h.summary(Counted(calls, "S")), h.button("x"))) == ""
+    @test calls[] == 0
 
     struct Contextual end
     Base.show(io::IO, ::MIME"text/markdown", ::Contextual) =
