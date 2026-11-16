@@ -278,7 +278,7 @@ HTMX.markdown_block(::MyCard) = true   # delimited like a div
 
 The blank line that follows a list item or block container goes in front of the first content that `show` writes, and line endings it opens with count toward that blank line, so splitting its output into several writes does not move the blank line into a later one: `print(io, "\n\n::: {.note data-name=\""); print(io, "x"); print(io, "\"}\nbody\n:::\n\n")` after a `div` keeps `data-name="x"` intact.
 
-That `show` runs while the document is written, and a `Node` it prints renders inside the call, in the place it was printed: whatever the `show` holds while printing (a counter, a scoped value such as a heading level) applies to that node's own children. It normally runs once per occurrence. It runs a second time when its output holds the only in-page link to an element's id (the document is then written again, with that id), and once more inside a `header`, whose layout is probed first, so it should have no side effects beyond its output.
+That `show` runs while the document is written, and a `Node` it prints renders inside the call, in the place it was printed: whatever the `show` holds while printing (a counter, a scoped value such as a heading level) applies to that node's own children. It normally runs once per occurrence. It runs a second time when its output holds the only in-page link to an element's id (the document is then written again, with that id), and once more inside a `header` or a `details`' label `summary`, whose layout is probed first, so it should have no side effects beyond its output. A `summary` of a `details` whose body writes nothing is not rendered at all.
 
 To lay its content out as a block of its own, such a `show` writes a Pandoc div with `HTMX.markdown_div` (public, not exported). Its content is what the function passed first writes:
 
@@ -337,8 +337,9 @@ Conversion table:
 | `title`                           | `# `                      |
 | `hr`                              | `---`                     |
 | `script`, `style`, `meta`, `link` | skipped                   |
-| Block containers (`div`, `main`, `body`, `html`, `form`, `nav`, `footer`, `aside`, `address`, `fieldset`, `hgroup`, `dialog`, `dl`, `dt`, `dd`, `details`) | recurse as a paragraph boundary (`details` without its `summary`) |
-| Other containers (`span`, `label`, `summary`, `head`) | recurse transparently |
+| Block containers (`div`, `main`, `body`, `html`, `form`, `nav`, `footer`, `aside`, `address`, `fieldset`, `hgroup`, `dialog`, `dl`, `dt`, `dd`) | recurse as a paragraph boundary |
+| `details` + `summary`             | a block container whose first `summary` is its label: a bold paragraph (`**Label**`), or the summary's own blocks such as a heading, then the whole body; a line break sets the label off in a list item, table cell or link; nothing at all when the body writes nothing |
+| Other containers (`span`, `label`, `summary`, `head`) | recurse transparently (a `summary` after the first is body content) |
 
 Unknown tags fall through transparently — their text content is printed.
 

@@ -22,6 +22,16 @@ struct _MDTargets
     met::Union{Nothing,Set{String}}  # ids met but not written, while links may be missing
 end
 _MDTargets() = _MDTargets(Set{String}(), nothing)
+# A `<details>`' label waiting for its body's first content (see `_md_write_labels!`),
+# with the place it is written in: the depths and language where the `<details>` started.
+struct _MDLabel
+    summary::Node
+    inline::Int
+    line::Int
+    code::Int
+    item::Int
+    lang::String
+end
 mutable struct _MDStream{T<:IO} <: IO
     io::T
     newlines::Int  # trailing '\n' count, capped at 2; 2 = start of output
@@ -40,9 +50,13 @@ mutable struct _MDStream{T<:IO} <: IO
     targets::_MDTargets  # ids that in-page links of the document point at
     anchor::Bool   # the output so far ends with an id anchor `[]{#…}`
     probe::Bool    # stop a layout probe as soon as a block is found
+    labels::Union{Nothing,Vector{_MDLabel}}  # `<details>` labels waiting for content, outermost first
 end
 _MDStream(io::IO; inline=0, line=0, code=0, item=0, lang="", targets=_MDTargets(), probe=false) =
-    _MDStream(io, 2, false, false, 0, inline, line, code, 0, item, 0, nothing, :none, lang, targets, false, probe)
+    _MDStream(io, 2, false, false, 0, inline, line, code, 0, item, 0, nothing, :none, lang, targets, false, probe,
+              nothing)
+# Labels are rare, so a stream holds a vector of them only once a `<details>` needs one.
+_md_label_count(s::_MDStream) = isnothing(s.labels) ? 0 : length(s.labels)
 
 # A value of any other type renders through its own `show`, called on the
 # stream while the document is written, and the nodes it prints render inside
@@ -146,8 +160,10 @@ Base.get(s::_MDStream, key, default) = get(s.io, key, default)
 # it: a value's `show` that opens a block with its own line endings and prints
 # the rest in further writes settles the boundary there, so nothing is written
 # into its later writes. `leading` is `nothing` for a write of line endings and
-# blanks only, which leaves the boundary waiting.
+# blanks only, which leaves the boundary waiting. A `<details>` label waiting
+# for its body is written first, in front of that content.
 function _md_before_write!(s::_MDStream, byte::UInt8, all_newlines::Bool, leading::Union{Nothing,Int})
+    _md_label_count(s) == 0 || isnothing(leading) || _md_write_labels!(s)
     if s.lazy && !isnothing(leading)
         s.lazy = false
         short = 2 - s.newlines - leading
@@ -211,8 +227,9 @@ function Base.unsafe_write(s::_MDStream, p::Ptr{UInt8}, n::UInt)
         trailing += 1
     end
     first = unsafe_load(p)
-    # only a pending boundary needs the opening line endings counted
-    leading = s.lazy && first == UInt8('\n') ? _md_opening_newlines(p, n) : 0
+    # only a pending boundary (or a label, which leaves one) needs the opening
+    # line endings counted
+    leading = (s.lazy || _md_label_count(s) > 0) && first == UInt8('\n') ? _md_opening_newlines(p, n) : 0
     _md_before_write!(s, first, trailing == n, leading)
     written = unsafe_write(s.io, p, n)
     _md_after_write!(s, trailing, trailing == n)
@@ -702,14 +719,83 @@ for t in (_MD_CONTAINERS..., :details, :header, :p, :title, :pre, :blockquote,
     t === :html || @eval _md_attr_kind(::Val{$(QuoteNode(t))}) = Val(:block)
 end
 
-# <details>: a block container that skips the <summary> toggle label
+# <details>: a block container whose first <summary> is its label. Markdown has
+# no viewport to collapse into, so the label is a paragraph of its own, bold
+# (a summary holding a heading or other blocks writes them as they are), and the
+# whole body follows it. The label waits on the stream for the body's first
+# content, so a disclosure with nothing to open (its body writes nothing) writes
+# nothing, its label included. A later <summary> is body content, as in HTML; in
+# a <pre> body the summary is plain text in its place.
 function _md(io, m, node::Node, ::Val{:details})
+    kids = children(node)
+    i = findfirst(c -> c isa Node && tag(c) === :summary, kids)
+    (isnothing(i) || get(io, :md_verbatim, false)) && return _md_container(io, m, node)
     _md_container_start(io)
-    for c in children(node)
-        c isa Node && tag(c) === :summary && continue
+    n = _md_label_count(io)
+    isnothing(io.labels) && (io.labels = _MDLabel[])
+    push!(io.labels, _MDLabel(kids[i], io.inline, io.line, io.code, io.item, io.lang))
+    for (j, c) in enumerate(kids)
+        j == i && continue
+        _md_found(io) && break
         _md_child(io, m, c)
     end
+    _md_label_count(io) > n && pop!(io.labels)  # the body wrote nothing
     _md_container_end(io)
+end
+
+# Write the labels waiting for content, outermost first. Each is written where
+# its `<details>` started: a bold paragraph, set off by a line break where a
+# blank line would break the line (inline content, a list item, a table cell),
+# else followed by the paragraph boundary a block container leaves. Inside a
+# layout probe a label is a block.
+function _md_write_labels!(s::_MDStream)
+    labels, s.labels = s.labels, nothing
+    for l in labels
+        s.probe ? _md_count_block(s) : _md_write_label!(s, l)
+    end
+    nothing
+end
+function _md_write_label!(s::_MDStream, l::_MDLabel)
+    layout = _md_label_layout(s, l)
+    layout === :none && return
+    # a `<br>` the body opens with waits for the content after the label
+    state = (s.inline, s.line, s.code, s.item, s.lang, s.breaks)
+    s.inline, s.line, s.code, s.item, s.lang, s.breaks = l.inline, l.line, l.code, l.item, l.lang, 0
+    summary = l.summary
+    if layout === :blocks
+        _md_node(s, _md_mime, Node(:div, attrs(summary), children(summary)))
+    elseif _md_span_context(s)
+        _md_count_block(s)
+        _md_inline_break!(s)
+        _md_node(s, _md_mime, Node(:strong, attrs(summary), children(summary)))
+        _md_inline_break!(s)
+    else
+        _md_container_start(s)
+        _md_node(s, _md_mime, Node(:strong, attrs(summary), children(summary)))
+        _md_container_end(s)
+    end
+    s.inline, s.line, s.code, s.item, s.lang = state
+    s.breaks += last(state)
+    nothing
+end
+# How a label reads: `:none` when its summary writes nothing, `:blocks` when it
+# starts a block (a heading), else `:inline`. The summary is probed as a
+# header's content is (`_md_has_blocks`), into a sink that notes whether
+# anything but blanks and line endings was written.
+function _md_label_layout(s::_MDStream, l::_MDLabel)
+    sink = _MDSink(false)
+    probe = _MDStream(IOContext(sink, s.io); lang=l.lang, targets=s.targets, probe=true)
+    _md_recurse(probe, _md_mime, l.summary)
+    probe.blocks > 0 ? :blocks : sink.content ? :inline : :none
+end
+mutable struct _MDSink <: IO
+    content::Bool  # whether anything but blanks and line endings was written
+end
+_md_content_byte(b::UInt8) = !(_md_blank(b) || b == UInt8('\n') || b == UInt8('\r'))
+Base.write(io::_MDSink, b::UInt8) = (io.content |= _md_content_byte(b); 1)
+function Base.unsafe_write(io::_MDSink, p::Ptr{UInt8}, n::UInt)
+    io.content || (io.content = any(i -> _md_content_byte(unsafe_load(p, i)), 1:n))
+    Int(n)
 end
 
 # Semantic blocks: emit a leading `---` divider so an agent reader can see

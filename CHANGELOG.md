@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.4.1
+
+- In Markdown, a `<details>` keeps its `<summary>`. Before, the summary was
+  dropped as a toggle label, so a disclosure's label (a table's title, a
+  card's question) was missing from every Markdown read. Markdown has no
+  viewport to collapse into, so a `<details>` now writes its first
+  `<summary>` as a bold paragraph, `**Label**`, followed by its whole body,
+  the way HTMXObjects' `SemanticDisclosure` writes its label. A summary
+  holding a heading or other blocks writes them as they are; in a list item,
+  a table cell or a link a line break sets the label off instead of a blank
+  line. A `<details>` whose body writes nothing (nothing, a button, a form of
+  controls only) still writes nothing, its label included. A later
+  `<summary>` is body content, as in HTML. A value's `show` inside the label
+  `<summary>` runs once more for its layout probe, as inside a `<header>`.
+
 ## 1.4.0
 
 - In Markdown, a table that a pipe table cannot hold (a header of several
