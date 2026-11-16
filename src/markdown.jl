@@ -933,42 +933,80 @@ end
 # content is still one paragraph, as inside a figure.
 _md(io, m, node::Node, ::Val{:figcaption}) =
     (_md_container_start(io); _md_inline_recurse(io, m, node); _md_container_end(io))
-
-# A table child is either a row itself (`<tr>` directly under `<table>`, which
-# browsers wrap in an implicit `<tbody>`) or a section whose `<tr>` children
-# are the rows; `caption`/`colgroup` hold no `tr` and so contribute no rows.
-# Each row is collected with the language it inherits from its section and the
-# ids it writes. A section's ids are collected as an entry without a row, so
-# they are anchored at the next cell, as a row's are.
-_collect_table_rows!(rows, s, ::Any, lang) = nothing
-_collect_table_rows!(rows, s, c::Node, lang) =
-    _collect_table_rows!(rows, s, c, _md_own_lang(c, lang), Val(tag(c)))
-_collect_table_rows!(rows, s, row::Node, lang, ::Val{:tr}) = push!(rows, (row, lang, _md_link_ids(s, row)))
-function _collect_table_rows!(rows, s, section::Node, lang, ::Val)
-    ids = _md_link_ids(s, section)
-    isempty(ids) || push!(rows, (nothing, lang, ids))
-    for row in children(section)
-        row isa Node && tag(row) === :tr && push!(rows, (row, _md_own_lang(row, lang), _md_link_ids(s, row)))
+# A table's rows, in the order they are written. Each entry is a row with the
+# language it inherits from its section, the ids it writes and its row group:
+# a section, or a run of rows directly under `<table>` (which browsers wrap in
+# an implicit `<tbody>`). A row span stops at the end of its group, as in
+# HTML. `caption`/`colgroup` hold no `tr` and so contribute no rows. A
+# section's ids are an entry without a row, so they are anchored at the next
+# cell, as a row's are. The header is every `<thead>` row, written first; a
+# table without one is headed by its first row. Returns the entries and the
+# number of header rows.
+const _MDTableEntry = Tuple{Union{Node,Nothing},String,Vector{String},Int}
+function _md_table_rows(s::_MDStream, table::Node)
+    head, rest = _MDTableEntry[], _MDTableEntry[]
+    group, bare, nhead = 0, false, 0
+    for c in children(table)
+        c isa Node || continue
+        lang = _md_own_lang(c, s.lang)
+        if tag(c) === :tr
+            bare || (group += 1; bare = true)
+            push!(rest, (c, lang, _md_link_ids(s, c), group))
+            continue
+        end
+        group += 1
+        bare = false
+        into = tag(c) === :thead ? head : rest
+        ids = _md_link_ids(s, c)
+        isempty(ids) || push!(into, (nothing, lang, ids, group))
+        for row in children(c)
+            row isa Node && tag(row) === :tr || continue
+            push!(into, (row, _md_own_lang(row, lang), _md_link_ids(s, row), group))
+            into === head && (nhead += 1)
+        end
     end
+    entries = append!(head, rest)
+    nhead == 0 && any(e -> !isnothing(e[1]), entries) && (nhead = 1)
+    entries, nhead
 end
 
-# A table row is one line: a cell renders `<br>` as inline HTML (see `_md` for
-# `:br`), folds any other line break (block content, multi-line text, a hard
-# break `\` with its line ending) into `<br>`, and escapes `|` so it cannot
-# split the cell, including inside code.
+# A cell's `colspan` or `rowspan`, as HTML reads it: a non-number, or a
+# `colspan` below 1, counts as 1, and `rowspan="0"` runs to the end of its
+# row group.
+function _md_span_attr(c::Node, key::Symbol)
+    v = get(attrs(c), key, nothing)
+    n = v === nothing || v === false ? nothing : tryparse(Int, strip(string(v)))
+    key === :rowspan ? (n === nothing || n < 0 ? 1 : n == 0 ? typemax(Int) : min(n, 65534)) :
+        (n === nothing || n < 1 ? 1 : min(n, 1000))
+end
+
+# A table cell's Markdown: its anchors (`prefix`) and its text, kept apart so
+# that a header cell over several columns anchors only the first. The text is
+# one line: a cell renders `<br>` as inline HTML (see `_md` for `:br`), folds
+# any other line break (block content, multi-line text, a hard break `\` with
+# its line ending) into `<br>`, and escapes `|` so it cannot split the cell,
+# including inside code.
 # The cell's children share one stream, so blocks among them are delimited.
 # A cell whose language (its own, else its row's) differs from the table's is
 # a language span. The ids waiting in `anchors` (its section's and row's) and
 # its own are anchors at its start.
-_push_cell_text!(cells, s, ::Any, lang, anchors) = nothing
-function _push_cell_text!(cells, s::_MDStream, c::Node, lang, anchors)
+struct _MDTableCell
+    prefix::String
+    text::String
+    row::Int
+    col::Int
+    rows::Int
+    cols::Int
+end
+_md_cell_md(c::_MDTableCell) = isempty(c.prefix) ? c.text : c.prefix * c.text
+function _md_table_cell(s::_MDStream, c::Node, lang, anchors)
     lang = _md_own_lang(c, lang)
     append!(anchors, _md_link_ids(s, c))
     prefix = isempty(anchors) ? "" :
         _md_cell_text(t -> foreach(id -> _md_anchor(t, id), anchors), s, lang, false)
     text = _md_cell_text(t -> _md_recurse(t, _md_mime, c), s, lang, !isempty(anchors))
     empty!(anchors)
-    push!(cells, prefix * (isempty(text) || _md_same_lang(lang, s.lang) ? text : _md_lang_span_text(text, lang)))
+    prefix, isempty(text) || _md_same_lang(lang, s.lang) ? text : _md_lang_span_text(text, lang)
 end
 function _md_cell_text(f, s::_MDStream, lang, anchor)
     buf = IOBuffer()
@@ -978,24 +1016,239 @@ function _md_cell_text(f, s::_MDStream, lang, anchor)
     replace(replace(strip(String(take!(buf))), r"(?:\\\n|\s*\n)\s*" => "<br>"), "|" => "\\|")
 end
 
-function _table_to_markdown(io::_MDStream, table::Node)
-    rows = Tuple{Union{Node,Nothing},String,Vector{String}}[]
-    for section in children(table)
-        _collect_table_rows!(rows, io, section, io.lang)
+# A table laid out on its grid, as a browser lays it out: each cell takes the
+# first free position of its row and covers `cols` × `rows` positions (a row
+# span stops at the end of its row group). `slot[r][c]` is the cell covering
+# row `r`, column `c`, or 0. The grid is as wide as its widest row. `anchors`
+# holds ids that no cell came after.
+struct _MDTableGrid
+    cells::Vector{_MDTableCell}
+    slot::Vector{Vector{Int}}
+    head::Int
+    anchors::Vector{String}
+end
+_md_grow!(v, n) = (k = length(v); k < n && fill!(view(resize!(v, n), k+1:n), 0); v)
+function _md_table_grid(s::_MDStream, entries, nhead)
+    groups = [e[4] for e in entries if !isnothing(e[1])]
+    last = collect(eachindex(groups))  # the last row of each row's group
+    for r in reverse(eachindex(groups))[2:end]
+        groups[r] == groups[r+1] && (last[r] = last[r+1])
     end
+    cells, slot = _MDTableCell[], [Int[] for _ in groups]
     anchors = String[]  # ids waiting for the next cell
-    written = 0
-    for (row, lang, ids) in rows
+    r = 0
+    for (row, lang, ids, _) in entries
         append!(anchors, ids)
         isnothing(row) && continue
-        written == 0 && (_md_block_start(io); _md_found(io) && return)
+        r += 1
+        col = 1
+        for c in children(row)
+            c isa Node || continue
+            prefix, text = _md_table_cell(s, c, lang, anchors)
+            while col <= length(slot[r]) && slot[r][col] != 0
+                col += 1
+            end
+            nr, nc = min(_md_span_attr(c, :rowspan), last[r] - r + 1), _md_span_attr(c, :colspan)
+            push!(cells, _MDTableCell(prefix, text, r, col, nr, nc))
+            for rr in r:r+nr-1
+                _md_grow!(slot[rr], col + nc - 1)
+                fill!(view(slot[rr], col:col+nc-1), length(cells))
+            end
+            col += nc
+        end
+    end
+    width = maximum(length, slot; init=0)
+    foreach(v -> _md_grow!(v, width), slot)
+    _MDTableGrid(cells, slot, nhead, anchors)
+end
+
+# A pipe table holds one header row and no spans. A table that fits it (no
+# row wider than its first) is written as it always was, row by row: one cell
+# per `<th>`/`<td>`, a short row short. Returns the ids no cell came after.
+function _md_pipe_fits(entries, nhead)
+    nhead == 1 || return false
+    width = -1
+    for (row, _, _, _) in entries
+        isnothing(row) && continue
+        n = 0
+        for c in children(row)
+            c isa Node || continue
+            _md_span_attr(c, :colspan) == 1 && _md_span_attr(c, :rowspan) == 1 || return false
+            n += 1
+        end
+        width < 0 ? (width = n) : n <= width || return false
+    end
+    true
+end
+_md_pipe_row(io, cells) = println(io, "| ", join(cells, " | "), " |")
+function _md_pipe_table(io::_MDStream, entries)
+    anchors = String[]  # ids waiting for the next cell
+    written = 0
+    for (row, lang, ids, _) in entries
+        append!(anchors, ids)
+        isnothing(row) && continue
         cells = String[]
         for c in children(row)
-            _push_cell_text!(cells, io, c, lang, anchors)
+            c isa Node || continue
+            prefix, text = _md_table_cell(io, c, lang, anchors)
+            push!(cells, isempty(prefix) ? text : prefix * text)
         end
-        println(io, "| ", join(cells, " | "), " |")
-        (written += 1) == 1 && println(io, "| ", join(fill("---", length(cells)), " | "), " |")
+        _md_pipe_row(io, cells)
+        (written += 1) == 1 && _md_pipe_row(io, fill("---", length(cells)))
     end
-    written > 0 && println(io)
+    anchors
+end
+
+# Any other table, by default, is one pipe table on the full grid, so every
+# reader (GFM, Pandoc, Julia `Markdown`) keeps each cell in its column. Each
+# column's header joins the header cells over it, top to bottom, with " / "
+# (`Group A / Column 1`), a cell spanning header rows counted once and empty
+# ones skipped; a header cell's anchors go in its first column only. A body
+# cell is written at its first position, and the positions it spans are empty
+# cells, which `md_to_node` reads back as a colspan. A header cell does not
+# run into the body.
+function _md_flat_table(io::_MDStream, g::_MDTableGrid)
+    width = isempty(g.slot) ? 0 : length(g.slot[1])
+    header = map(1:width) do col
+        prefixes, texts, seen = String[], String[], 0
+        for r in 1:g.head
+            id = g.slot[r][col]
+            (id == 0 || id == seen) && continue
+            seen = id
+            c = g.cells[id]
+            c.col == col && !isempty(c.prefix) && push!(prefixes, c.prefix)
+            isempty(c.text) || push!(texts, c.text)
+        end
+        join(prefixes, '​') * join(texts, " / ")
+    end
+    _md_pipe_row(io, header)
+    _md_pipe_row(io, fill("---", width))
+    for r in g.head+1:length(g.slot)
+        _md_pipe_row(io, map(1:width) do col
+            id = g.slot[r][col]
+            c = id == 0 ? nothing : g.cells[id]
+            isnothing(c) || c.row != r || c.col != col ? "" : _md_cell_md(c)
+        end)
+    end
+end
+
+# Inside `with_markdown_grid_tables(f, true)` such a table is a Pandoc grid
+# table instead, which keeps the header rows and the spans: header rows above
+# a `+===+` rule, a span drawn as one box, columns padded to their widest cell
+# by display width. A grid cell is block content in Pandoc, so a cell that
+# opens like a block (a list marker, `#`, `>`, a rule, a fence or a link
+# definition) gets its first marker escaped: a cell `-` would be an empty
+# bullet list, `1. Liga` a numbered one.
+const _MD_GRID_TABLES = ScopedValue(false)
+
+"""
+    HTMX.markdown_grid_tables() -> Bool
+
+Whether Markdown written here spells a table that a pipe table cannot hold (a
+header of several rows, a `colspan` or `rowspan`, a row wider than the header)
+as a Pandoc grid table: `false` (the default) unless
+[`HTMX.with_markdown_grid_tables`](@ref) switched it on around the current call.
+"""
+markdown_grid_tables() = _MD_GRID_TABLES[]
+
+"""
+    HTMX.with_markdown_grid_tables(f, on::Bool)
+
+Call `f()` with Pandoc grid tables switched on or off, and return its result.
+
+A table that a pipe table can hold (one header row, no `colspan` or `rowspan`
+above 1, no row wider than the header) is a pipe table either way. Any other
+table is, by default, one pipe table on its full column grid: each column's
+header joins the header cells over it with `" / "` (`Group A / Column 1`), and
+the positions a body cell spans are empty cells, so GFM, Pandoc and Julia's
+`Markdown` all keep every cell in its column. With `on = true` it is a Pandoc
+grid table instead, with every header row and every span as in the HTML, which
+Pandoc (and so Quarto, for a PDF) reads but GFM and Julia's `Markdown` show as
+text.
+
+The setting is a scoped value: every Markdown render inside `f`, a fresh
+`repr("text/markdown", x)` in a value's own `show` included, and every task
+`f` starts, sees it until `f` returns. A nested
+`with_markdown_grid_tables(g, false)` switches it back off inside `g`.
+"""
+with_markdown_grid_tables(f, on::Bool) = with(f, _MD_GRID_TABLES => on)
+
+const _MD_GRID_LIST_NUMBER = r"^(\(?(?:[0-9]{1,9}|[a-zA-Z]|[ivxlcdmIVXLCDM]+|#))([.)])(?=\s|$)"
+const _MD_GRID_BLOCK_START = r"^(?:[-+>]|\*(?=\s|$)|(?:\*\s*){3,}$|(?:_\s*){3,}$|#{1,6}(?=\s|$)|~~~|```|\[[^\]]*\]:)"
+function _md_grid_text(c::_MDTableCell)
+    text = replace(_md_cell_md(c), '\t' => ' ')
+    m = match(_MD_GRID_LIST_NUMBER, text)
+    m === nothing || return string(m[1], '\\', m[2], SubString(text, ncodeunits(m.match) + 1))
+    occursin(_MD_GRID_BLOCK_START, text) ? "\\" * text : text
+end
+function _md_grid_table(io::_MDStream, g::_MDTableGrid)
+    nrows = length(g.slot)
+    width = nrows == 0 ? 0 : length(g.slot[1])
+    texts = map(_md_grid_text, g.cells)
+    # the cell drawn at row r, column col: a header cell stops at the header
+    own(r, col) = (id = g.slot[r][col]; id != 0 && g.cells[id].row <= g.head < r ? 0 : id)
+    w = ones(Int, width)
+    for (id, c) in enumerate(g.cells)
+        c.cols == 1 && (w[c.col] = max(w[c.col], textwidth(texts[id])))
+    end
+    for id in sortperm(g.cells; by=c -> c.cols)
+        c = g.cells[id]
+        c.cols > 1 || continue
+        span = c.col:min(c.col + c.cols - 1, width)
+        need = textwidth(texts[id]) - (sum(w[span]) + 3 * (length(span) - 1))
+        need > 0 && (w[last(span)] += need)
+    end
+    # the rule above row b (`=` under the header): a span running on from row
+    # b-1 leaves a gap
+    function rule(b)
+        a = b - 1
+        ch = a == g.head ? '=' : '-'  # a table with no body ends in it
+        on(col) = 1 <= a && b <= nrows && own(a, col) != 0 && own(a, col) == own(b, col)
+        line = IOBuffer()
+        for col in 1:width
+            print(line, col == 1 ? (on(1) ? '|' : '+') :
+                on(col - 1) && on(col) ? (own(a, col - 1) == own(a, col) ? ' ' : '|') : '+')
+            print(line, (on(col) ? ' ' : ch)^(w[col] + 2))
+        end
+        print(line, width > 0 && on(width) ? '|' : '+')
+        println(io, String(take!(line)))
+    end
+    for r in 1:nrows
+        rule(r)
+        line = IOBuffer()
+        print(line, '|')
+        col = 1
+        while col <= width
+            id = own(r, col)
+            stop = col
+            while id != 0 && stop < width && own(r, stop + 1) == id
+                stop += 1
+            end
+            text = id != 0 && g.cells[id].row == r ? texts[id] : ""
+            span = sum(w[col:stop]) + 3 * (stop - col)
+            print(line, ' ', text, ' '^(span - textwidth(text)), " |")
+            col = stop + 1
+        end
+        println(io, String(take!(line)))
+    end
+    rule(nrows + 1)
+end
+
+function _table_to_markdown(io::_MDStream, table::Node)
+    entries, nhead = _md_table_rows(io, table)
+    if nhead > 0
+        _md_block_start(io)
+        _md_found(io) && return
+        if _md_pipe_fits(entries, nhead)
+            anchors = _md_pipe_table(io, entries)
+        else
+            g = _md_table_grid(io, entries, nhead)
+            markdown_grid_tables() ? _md_grid_table(io, g) : _md_flat_table(io, g)
+            anchors = g.anchors
+        end
+        println(io)
+    else
+        anchors = reduce(vcat, (e[3] for e in entries); init=String[])
+    end
     foreach(id -> _md_anchor(io, id), anchors)  # ids that no cell came after
 end

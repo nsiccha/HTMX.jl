@@ -639,6 +639,79 @@ multi-line text, a hard line break) folds into `<br>`, and `|` is escaped as
 end
 
 """
+A table that a pipe table cannot hold (a header of several rows, a `colspan`
+or `rowspan`, a row wider than the header) keeps every cell in its column:
+by default one pipe table on the full grid, each column headed by the header
+cells over it joined with " / ", the positions a body cell spans left empty;
+inside `with_markdown_grid_tables(f, true)` a Pandoc grid table with the
+header rows and spans of the HTML. A table a pipe table holds is unchanged
+either way.
+"""
+@testitem "markdown - tables with a multi-row header or spanned cells keep every cell" setup=[HTMXTestHelpers] tags=[:unit, :markdown, :tables] begin
+    grid(f) = HTMX.with_markdown_grid_tables(f, true)
+    both(t) = (to_md(t), grid(() -> to_md(t)))
+    grouped = h.table(
+        h.thead(h.tr(h.th("Group A"; colspan="2"), h.th("Group B"; colspan="2")),
+            h.tr([h.th("C$i") for i in 1:4]...)),
+        h.tbody(h.tr([h.td("v$i") for i in 1:4]...)))
+    gflat, gbox = both(grouped)
+    @test gflat == "| Group A / C1 | Group A / C2 | Group B / C3 | Group B / C4 |\n" *
+        "| --- | --- | --- | --- |\n| v1 | v2 | v3 | v4 |\n\n"
+    @test gbox == "+----+----+----+----+\n| Group A | Group B |\n+----+----+----+----+\n" *
+        "| C1 | C2 | C3 | C4 |\n+====+====+====+====+\n| v1 | v2 | v3 | v4 |\n+----+----+----+----+\n\n"
+    # body spans: the value stays in its first column, the rest are empty
+    @test both(h.table(h.thead(h.tr(h.th("C1"), h.th("C2"), h.th("C3"))),
+        h.tbody(h.tr(h.td("wide"; colspan=2), h.td("x"))))) ==
+        ("| C1 | C2 | C3 |\n| --- | --- | --- |\n| wide |  | x |\n\n",
+         "+----+----+----+\n| C1 | C2 | C3 |\n+====+====+====+\n| wide    | x  |\n+----+----+----+\n\n")
+    @test both(h.table(h.thead(h.tr(h.th("C1"), h.th("C2"))),
+        h.tbody(h.tr(h.td("tall"; rowspan="2"), h.td("b1")), h.tr(h.td("b2"))))) ==
+        ("| C1 | C2 |\n| --- | --- |\n| tall | b1 |\n|  | b2 |\n\n",
+         "+------+----+\n| C1   | C2 |\n+======+====+\n| tall | b1 |\n|      +----+\n|      | b2 |\n+------+----+\n\n")
+    # a row wider than the header widens the grid
+    @test to_md(h.table(h.thead(h.tr(h.th("A"))), h.tbody(h.tr(h.td("a"), h.td("extra"))))) ==
+        "| A |  |\n| --- | --- |\n| a | extra |\n\n"
+    # a header cell over both header rows counts once; its anchor goes in its first column
+    linked = h.div(h.a("g"; href="#g"), h.table(
+        h.thead(h.tr(h.th("Station"; rowspan=2), h.th("Größe"; colspan=2, id="g")),
+            h.tr(h.th("50%"), h.th("95%"))),
+        h.tbody(h.tr(h.td("A"), h.td("-"), h.td("1. Liga")))))
+    flat, boxed = both(linked)
+    @test flat == "[g](#g)\n\n| Station | []{#g}Größe / 50% | Größe / 95% |\n| --- | --- | --- |\n" *
+        "| A | - | 1. Liga |\n\n"
+    # a grid cell is a block in Pandoc, so a list marker is escaped; widths count display width
+    @test boxed == "[g](#g)\n\n+---------+-----+----------+\n| Station | []{#g}Größe    |\n" *
+        "|         +-----+----------+\n|         | 50% | 95%      |\n+=========+=====+==========+\n" *
+        "| A       | \\-  | 1\\. Liga |\n+---------+-----+----------+\n\n"
+    # a table with no body ends in its header rule
+    @test grid(() -> to_md(h.table(h.thead(h.tr(h.th("G"; colspan=2)), h.tr(h.th("a"), h.th("b")))))) ==
+        "+---+---+\n| G     |\n+---+---+\n| a | b |\n+===+===+\n\n"
+    # a row span stops at the end of its section; rowspan="0" runs to it
+    @test to_md(h.table(h.thead(h.tr(h.th("A"), h.th("B"))),
+        h.tbody(h.tr(h.td("t"; rowspan="0"), h.td("1")), h.tr(h.td("2"))),
+        h.tbody(h.tr(h.td("u"), h.td("3"))))) ==
+        "| A | B |\n| --- | --- |\n| t | 1 |\n|  | 2 |\n| u | 3 |\n\n"
+    # `<thead>` rows head the table wherever the section sits
+    @test to_md(h.table(h.tbody(h.tr(h.td("1"))), h.thead(h.tr(h.th("A"))))) == "| A |\n| --- |\n| 1 |\n\n"
+    # the default pipe table reads back with its colspan
+    back = md_to_node(to_md(h.table(h.thead(h.tr(h.th("a"), h.th("b"), h.th("c"))),
+        h.tbody(h.tr(h.td("w"; colspan=2), h.td("x"))))))
+    cells = HTMX.children(only(HTMX.children(last(HTMX.children(only(HTMX.children(back)))))))
+    @test HTMX.attrs(cells[1])[:colspan] == "2"
+    # a table a pipe table holds is written as before, with the switch on or off
+    simple = h.table(h.thead(h.tr(h.th("a"), h.th("b"))), h.tbody(h.tr(h.td("1"), h.td("2")), h.tr(h.td("3"))))
+    old = "| a | b |\n| --- | --- |\n| 1 | 2 |\n| 3 |\n\n"
+    @test both(simple) == (old, old)
+    # the switch is a scoped value: off by default, seen by a fresh render, nested off again
+    struct Fresh; n::HTMX.Node; end
+    Base.show(io::IO, m::MIME"text/markdown", x::Fresh) = print(io, sprint(show, m, x.n))
+    @test HTMX.markdown_grid_tables() === false
+    @test grid(HTMX.markdown_grid_tables) === true
+    @test grid(() -> to_md(h.div(Fresh(grouped)))) == gbox
+    @test grid(() -> HTMX.with_markdown_grid_tables(() -> to_md(grouped), false)) == gflat
+end
+
+"""
 A table as a figure's first child still parses as a table: a blank line
 follows the opening fence, since a pipe table cannot interrupt the paragraph
 that a fence line becomes where it is not a div opener (GFM).

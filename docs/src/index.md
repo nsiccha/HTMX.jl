@@ -255,6 +255,17 @@ HTMX.with_markdown_seams(false) do
 end   # "intro\n\nx\n\n", where the default writes "intro\n\n---\n\nx\n\n\n"
 ```
 
+A table that a pipe table cannot hold (a header of several rows, a `colspan` or `rowspan` above 1, a row wider than the header) is written on its full column grid, so every cell stays in its column in GFM, Pandoc and Julia's `Markdown` alike: one header row in which each column joins the header cells over it with `" / "`, and empty cells where a body cell spans, which `md_to_node` reads back as a colspan. Inside `HTMX.with_markdown_grid_tables(f, true)` (public, not exported) such a table is a Pandoc grid table instead, with its header rows and spans as in the HTML. Pandoc, and so Quarto for a PDF, reads it; GFM and Julia's `Markdown` show it as text. Like the seam setting it is a scoped value, and `HTMX.markdown_grid_tables()` reads it. A table a pipe table holds is the same either way:
+
+```julia
+t = h.table(h.thead(h.tr(h.th("Group"; colspan=2)), h.tr(h.th("a"), h.th("b"))),
+            h.tbody(h.tr(h.td("1"), h.td("2"))))
+repr("text/markdown", t)
+# "| Group / a | Group / b |\n| --- | --- |\n| 1 | 2 |\n\n"
+HTMX.with_markdown_grid_tables(() -> repr("text/markdown", t), true)
+# "+---+---+\n| Group |\n+---+---+\n| a | b |\n+===+===+\n| 1 | 2 |\n+---+---+\n\n"
+```
+
 Every block element starts on its own line: inline text before it inside a container (`h.div("lead", h.h2("x"))`) is closed as a paragraph, and content after a list item starts after a blank line.
 
 A block container (`div`, `nav`, `dl`, …) is a paragraph boundary, as in HTML: `h.div(h.div("one"), h.div("two"))` renders `"one\n\ntwo"`, not `"onetwo"`. It adds no blank line at the end of the output. Inside content that must stay one paragraph — the text of a link or other inline element, a heading, a figure caption — containers stay transparent, so `h.a(h.div("card"), h.div("sub"))` is still one link. A paragraph there, where a blank line would end that content, is set off by a line break, written as a `<br>` is: `h.a(h.p("Title"), h.p("Subtitle"); href="/x")` renders `"[Title\\\nSubtitle](/x)"`, a heading gets a space instead and a table cell `<br>`.
@@ -314,7 +325,7 @@ Conversion table:
 | `ol` + `li`                       | `1. item` lines, numbered from `start` |
 | `pre`                             | fenced code block         |
 | `blockquote`                      | `> ` prefixed lines       |
-| `table` + `thead`/`tbody`/`tr`    | pipe-style Markdown table |
+| `table` + `thead`/`tbody`/`tr`    | pipe-style Markdown table; on the full column grid for a multi-row header or spans (a Pandoc grid table inside `HTMX.with_markdown_grid_tables(f, true)`) |
 | `img`                             | `![](src){alt="…"}`, inline |
 | `figure` + `figcaption`           | `::: {#id}` fenced div, caption last |
 | `a`                               | `[text](href)`; without a target (no `href`, as on an htmx-only `h.a("x"; hx_get=…)`, or `href=""`/`"#"`) just its content, like a `span` |

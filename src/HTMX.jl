@@ -21,6 +21,8 @@ For a value's own `show(io, MIME"text/markdown"(), x)`:
 For Markdown output:
 - [`HTMX.with_markdown_seams`](@ref) — switch the `---` before `<article>`/`<section>` on or off
 - [`HTMX.markdown_seams`](@ref) — whether that seam is on
+- [`HTMX.with_markdown_grid_tables`](@ref) — write a table a pipe table cannot hold as a Pandoc grid table
+- [`HTMX.markdown_grid_tables`](@ref) — whether grid tables are on
 """
 module HTMX
 
@@ -30,7 +32,7 @@ using ScopedValues: ScopedValue, with
 export auto, h, Node, Raw, @__str, md_to_node
 # `public` is Julia 1.11 syntax; on 1.10 these are documented as public.
 @static if VERSION >= v"1.11.0-DEV.469"
-    eval(Meta.parse("public markdown_block, markdown_div, markdown_block_context, markdown_seams, with_markdown_seams"))
+    eval(Meta.parse("public markdown_block, markdown_div, markdown_block_context, markdown_seams, with_markdown_seams, markdown_grid_tables, with_markdown_grid_tables"))
 end
 
 

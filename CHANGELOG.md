@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.4.0
+
+- In Markdown, a table that a pipe table cannot hold (a header of several
+  rows, a `colspan` or `rowspan` above 1, a row wider than the header) keeps
+  every cell in its column. Before, the first row was written as the header,
+  spans were ignored and later header rows became body rows, so Pandoc
+  dropped cells past the first row's width and a span moved the cells after
+  it one column over, with no error. The table is now laid out on its full
+  column grid and written as one pipe table: each column's header joins the
+  header cells over it, top to bottom, with `" / "` (`Group A / Column 1`),
+  and the positions a body cell spans are empty cells, which `md_to_node`
+  reads back as a colspan. `<thead>` rows head the table wherever the section
+  sits. A table a pipe table holds is written as before.
+- Add `HTMX.with_markdown_grid_tables(f, on::Bool)` and
+  `HTMX.markdown_grid_tables()` (public, not exported). Inside
+  `with_markdown_grid_tables(f, true)` such a table is a Pandoc grid table
+  instead, with every header row and span as in the HTML, for Markdown that
+  Pandoc (so Quarto, for a PDF) reads; GFM and Julia's `Markdown` show a grid
+  table as text. A grid cell that opens like a block (`-`, `1.`, `#`, `>`, …)
+  gets that marker escaped. The setting is a scoped value, like
+  `with_markdown_seams`; the default is off.
+
 ## 1.3.1
 
 - In Markdown, the blank line that follows a list item or block container is
