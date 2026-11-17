@@ -970,8 +970,51 @@ continuation of the last item; consecutive items stay a tight list.
     @test to_md(h.div(h.ul(h.li("a"), h.li("b")), "tail")) == "- a\n- b\n\ntail"
     @test to_md(h.div(h.ul(h.li("a")), h.p("p"))) == "- a\n\np\n\n"
     @test to_md(h.div(h.ul(h.li("a")), h.h2("b"))) == "- a\n\n## b\n"
-    # whitespace-only text between items keeps them one list
-    @test to_md(h.ul(h.li("a"), " ", h.li("b"))) == "- a\n - b\n"
+    # whitespace-only text between items keeps them one list, and indents neither
+    @test to_md(h.ul(h.li("a"), " ", h.li("b"))) == "- a\n- b\n"
+end
+
+"""
+Text of only blanks (spaces, tabs) between elements is written where it
+separates inline content, mid-line, and left out at the start of a line, where
+Markdown would read it as indentation: a fenced div or heading after it would
+not open (Pandoc reads ` ::: {.note}` as text), and four blanks would start an
+indented code block. A span's content starts mid-line, so it keeps a leading
+blank; a `<pre>` body and a value's own `show` keep their blanks as written,
+since those are Markdown.
+"""
+@testitem "markdown - whitespace-only text indents no line" setup=[HTMXTestHelpers] tags=[:unit, :markdown] begin
+    import Markdown
+    struct Fence end
+    Base.show(io::IO, ::MIME"text/markdown", ::Fence) = print(io, "::: {.note}\n**Label**\n:::\n\n")
+    HTMX.markdown_block(::Fence) = true
+    struct Raw
+        s::String
+    end
+    Base.show(io::IO, ::MIME"text/markdown", x::Raw) = print(io, x.s)
+
+    # at the start of a line: left out
+    @test to_md(h.div(h.p("Prose."), " ", Fence())) == "Prose.\n\n::: {.note}\n**Label**\n:::\n\n"
+    @test to_md(h.div(h.div(h.p("Prose.")), h.div(" "), Fence())) == "Prose.\n\n::: {.note}\n**Label**\n:::\n\n"
+    @test to_md(h.div(h.p("Prose."), " ", h.h2("Heading"))) == "Prose.\n\n## Heading\n"
+    @test to_md(h.div(h.p("Prose."), "    ", h.p("After."))) == "Prose.\n\nAfter.\n\n"
+    @test to_md(h.div(h.p("Prose."), "\t", h.p("After."))) == "Prose.\n\nAfter.\n\n"
+    @test to_md(h.ul(h.li("a"), "    ", h.li("b"))) == "- a\n- b\n"
+    @test to_md(h.div(" ", h.h2("H"))) == "## H\n"
+    @test to_md([h.p("x"), " ", h.h2("H")]) == "x\n\n## H\n"
+    @test to_md(h.blockquote(h.p("a"), "    ", h.p("b"))) == "> a\n> \n> b\n\n"
+
+    # mid-line: a separator
+    @test to_md(h.p(h.span("a"), " ", h.span("b"))) == "a b\n\n"
+    @test to_md(h.p(h.strong("a"), " ", h.em("b"))) == "**a** *b*\n\n"
+    @test to_md(h.p("a", h.br(), " ", "b")) == "a \\\nb\n\n"
+    @test to_md(h.p("a", h.span(" ", "b"; lang="en"))) == "a[ b]{lang=\"en\"}\n\n"
+
+    # verbatim, and a value's own `show`: written as they are
+    @test to_md(h.pre(h.code(h.span("x"), "\n", h.span("    "), h.span("y")))) == "```\nx\n    y\n```\n"
+    @test to_md(h.div(h.p("Prose."), Raw("- a\n"), Raw("  "), Raw("- b\n"))) == "Prose.\n\n- a\n  - b\n"
+    item = Markdown.parse("- item\n\n  continued\n")  # its `show` writes the continuation's indent alone
+    @test to_md(h.div(h.p("Prose."), item)) == "Prose.\n\n" * to_md(item)
 end
 
 """
