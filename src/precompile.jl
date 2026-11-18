@@ -33,7 +33,8 @@ using PrecompileTools: @setup_workload, @compile_workload
                 h.figure(h.img(src="/plot.png", alt="plot"), h.figcaption("caption")),
                 h.form(action="/save")(h.input(type="text", name="q", value=""),
                     h.button("Save"; type="submit"))),
-            h.div(HyperscriptString("on click log 'ok'"))))
+            h.div(HyperscriptString("on click log 'ok'")),
+            h.p("optional", nothing, Any["a", h.b("b")])))
         parsed = md_to_node(source)
         for node in (paragraph, table, document, parsed)
             repr(MIME"text/html"(), node)

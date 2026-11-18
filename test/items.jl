@@ -190,6 +190,36 @@ the arguments is quadratic).
     @test a_large < 3 * a_small
 end
 
+"""
+Collecting positional children compiles once, not once per child count and
+mix: the children's tuple type changes with every shape a page builds
+(`NTuple{83,Node}`, `Tuple{String,Node,String}`), and the vararg builders hand
+it over through a dynamic call. Specializing on it was a runtime compile per
+shape in every fresh process of an app; now every such shape shares one
+method instance.
+"""
+@testitem "children of any count and mix share one compiled collector" setup=[HTMXTestHelpers] tags=[:unit, :nodes] begin
+    flatten = only(methods(HTMX._flatten))
+    instances() = Set(mi.specTypes for mi in Base.specializations(flatten))
+    HTMX._flatten(Base.inferencebarrier((h.b("warm"), "up")))
+    before = instances()
+    shapes = Any[]
+    for n in 13:24                          # child counts no other item builds
+        push!(shapes, ntuple(_ -> h.td("x"), n))
+        push!(shapes, ntuple(i -> isodd(i) ? "t$i" : h.em("e$i"), n))
+        push!(shapes, (ntuple(_ -> nothing, n)..., h.b("b"), ["c", nothing]))
+    end
+    for t in shapes                         # a dynamic call, as the builders make
+        HTMX._flatten(t)
+    end
+    @test instances() == before
+    @test HTMX._flatten(last(shapes)) == Any[last(shapes)[end-1], "c"]
+    # the builders still flatten in order, spliced vectors and dropped nothings
+    @test html(h.p("x", nothing, h.b("y"), ["z", nothing])) == "<p>x<b>y</b>z</p>"
+    @test html(h.tr([h.td("$i") for i in 1:30]...)) ==
+          "<tr>" * join("<td>$i</td>" for i in 1:30) * "</tr>"
+end
+
 # ================================================================
 # Attribute handling
 # ================================================================
