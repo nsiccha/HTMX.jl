@@ -59,10 +59,22 @@ _push_flat!(out, ::Nothing) = out
 # `nothing` child, or a `nothing` element of a vector, is no child at all, as a
 # `nothing` attribute is no attribute: `cond ? h.p("x") : nothing` leaves the
 # paragraph out instead of writing the text "nothing".
-function _flatten(args)
+#
+# `args` is the caller's positional tuple, a new type for every child count and
+# mix (`NTuple{83,Node}`, `Tuple{String,Node,String}`). The vararg builders
+# reach `_flatten` through a dynamic call, and specializing on the tuple
+# compiled one method instance per shape in every fresh process. Unspecialized,
+# one compiled instance serves every tuple that arrives that way, and
+# `_push_flat!` still specializes per child type, of which a page has a
+# handful. A call site that knows its tuple type still infers (and may inline)
+# it; `Base.@nospecializeinfer` would stop that and costs allocations on the
+# splatting paths. `nfields` and `getfield` read the untyped tuple without a
+# dispatch; `for a in args` would dispatch `iterate` and box its state on
+# every child.
+function _flatten(@nospecialize(args))
     out = Any[]
-    for a in args
-        _push_flat!(out, a)
+    for i in 1:nfields(args)
+        _push_flat!(out, getfield(args, i))
     end
     out
 end
