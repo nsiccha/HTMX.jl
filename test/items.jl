@@ -1678,6 +1678,13 @@ from the Markdown of a non-`Node` child. A `<pre>` body writes no ids.
     @test to_md([h.p(go), target]) == "[go](#t)\n\n" * written
     @test to_md(h.div("see [go](#t)", target)) == "see [go](#t)\n\n" * written
     @test to_md(h.div(LinkThing(), target)) == "[go](#t)\n\n" * written
+    # Attribute dictionaries can hold values whose string representation is a view.
+    struct ViewID end
+    Base.string(::ViewID) = SubString("xt", 2)
+    view_target = Node(:div, Dict(:id => ViewID()), [h.p("x")])
+    @test to_md(h.div(LinkThing(), view_target)) == "[go](#t)\n\n" * written
+    stream = HTMX._MDStream(IOContext(IOBuffer()))
+    @test only(Base.return_types(HTMX._md_link_id, (typeof(stream), Node))) <: Union{Nothing,AbstractString}
     # only the ids that are linked; other pages' fragments and `#` are not in-page links
     @test to_md(h.div(go, h.p(id="u")("y"))) == "[go](#t)\n\ny\n\n"
     @test to_md(h.div(h.a("x"; href="/p#t"), h.a("y"; href="#"), target)) == "[x](/p#t)y\n\nx\n\n"
