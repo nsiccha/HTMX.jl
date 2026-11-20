@@ -337,7 +337,8 @@ _md_scan_targets!(t, text) = (for mt in eachmatch(r"\]\(#([^\s)]+)", text); push
 function _md_link_id(s::_MDStream, n::Node)
     id = get(attrs(n), :id, nothing)
     (id === nothing || id === false) && return nothing
-    id = string(id)
+    # Keep the set lookup independent of equality methods for non-string keys.
+    id = string(id)::AbstractString
     id in s.targets.links && return id
     isnothing(s.targets.met) || push!(s.targets.met, id)
     nothing
